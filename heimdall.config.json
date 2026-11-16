@@ -1,0 +1,23 @@
+{
+  "steps": {
+    "typecheck": {
+      "command": "npx --no-install tsc --noEmit"
+    },
+    "tests": {
+      "command": "npx --no-install vitest run --reporter=verbose"
+    },
+    "eslint": {
+      "command": "npx --no-install eslint src test -f json"
+    },
+    "knip": {
+      "command": "npx --no-install knip --reporter json --no-progress --production"
+    },
+    "jscpd": {
+      "command": "npx --no-install jscpd src --reporters json --silent --output \"$HEIMDALL_TMP\" && cat \"$HEIMDALL_TMP/jscpd-report.json\""
+    },
+    "line-checks": {
+      "enabled": true
+    }
+  },
+  "flakes": []
+}

@@ -1,0 +1,40 @@
+{
+  "requireParentBase": false,
+  "maxChangedFiles": 100,
+  "steps": {
+    "typecheck": {
+      "enabled": true,
+      "command": "npx --no-install tsc --noEmit",
+      "timeoutMs": 300000
+    },
+    "tests": {
+      "enabled": true,
+      "command": "npx --no-install vitest run --reporter=json --reporter=verbose",
+      "timeoutMs": 300000
+    },
+    "eslint": {
+      "enabled": true,
+      "command": "npx --no-install eslint . -f json",
+      "timeoutMs": 300000,
+      "maxWarnings": 0
+    },
+    "knip": {
+      "enabled": true,
+      "command": "npx --no-install knip --reporter json --no-progress",
+      "timeoutMs": 300000
+    },
+    "jscpd": {
+      "enabled": true,
+      "command": "npx --no-install jscpd src --reporters json --silent --output \"$HEIMDALL_TMP\" && cat \"$HEIMDALL_TMP/jscpd-report.json\"",
+      "timeoutMs": 300000
+    },
+    "line-checks": {
+      "enabled": true,
+      "allowSilencing": []
+    }
+  },
+  "flakes": [],
+  "setup": [],
+  "teardown": [],
+  "protectedPaths": []
+}

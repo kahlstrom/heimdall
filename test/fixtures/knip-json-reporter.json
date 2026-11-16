@@ -1,0 +1,134 @@
+{
+  "files": [
+    "src/orphan.ts"
+  ],
+  "issues": [
+    {
+      "file": "package.json",
+      "dependencies": [
+        {
+          "name": "left-pad",
+          "line": 10,
+          "col": 6,
+          "pos": 165
+        }
+      ],
+      "devDependencies": [
+        {
+          "name": "unused-dev-pkg",
+          "line": 13,
+          "col": 6,
+          "pos": 218
+        }
+      ],
+      "optionalPeerDependencies": [],
+      "unlisted": [],
+      "binaries": [
+        {
+          "name": "tsc"
+        },
+        {
+          "name": "unlisted-bin"
+        }
+      ],
+      "unresolved": [],
+      "exports": [],
+      "types": [],
+      "enumMembers": {},
+      "classMembers": {},
+      "duplicates": [],
+      "catalog": []
+    },
+    {
+      "file": "src/index.ts",
+      "dependencies": [],
+      "devDependencies": [],
+      "optionalPeerDependencies": [],
+      "unlisted": [
+        {
+          "name": "unlisted-pkg",
+          "line": 2,
+          "col": 9,
+          "pos": 64
+        }
+      ],
+      "binaries": [],
+      "unresolved": [
+        {
+          "name": "./missing-file.js",
+          "line": 3,
+          "col": 9,
+          "pos": 87
+        }
+      ],
+      "exports": [],
+      "types": [],
+      "enumMembers": {},
+      "classMembers": {},
+      "duplicates": [],
+      "catalog": []
+    },
+    {
+      "file": "src/used.ts",
+      "dependencies": [],
+      "devDependencies": [],
+      "optionalPeerDependencies": [],
+      "unlisted": [],
+      "binaries": [],
+      "unresolved": [],
+      "exports": [
+        {
+          "name": "unusedExport",
+          "line": 2,
+          "col": 14,
+          "pos": 42
+        }
+      ],
+      "types": [
+        {
+          "name": "UnusedType",
+          "line": 4,
+          "col": 13,
+          "pos": 73
+        }
+      ],
+      "enumMembers": {
+        "Color": [
+          {
+            "name": "Unused",
+            "line": 8,
+            "col": 3,
+            "pos": 139
+          }
+        ]
+      },
+      "classMembers": {
+        "Box": [
+          {
+            "name": "leftover",
+            "line": 15,
+            "col": 3,
+            "pos": 219
+          }
+        ]
+      },
+      "duplicates": [
+        [
+          {
+            "name": "dup",
+            "line": 20,
+            "col": 13,
+            "pos": 273
+          },
+          {
+            "name": "default",
+            "line": 21,
+            "col": 15,
+            "pos": 297
+          }
+        ]
+      ],
+      "catalog": []
+    }
+  ]
+}

@@ -1,0 +1,43 @@
+/**
+ * Temp git repos for gate tests. Always cleaned up, even on failure.
+ * These are plain directories — never git worktrees.
+ */
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
+export function git(cwd: string, args: readonly string[]): string {
+  return execFileSync('git', [...args], { cwd, encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] });
+}
+
+export function writeRepoFile(repo: string, rel: string, contents: string): void {
+  const abs = path.join(repo, rel);
+  fs.mkdirSync(path.dirname(abs), { recursive: true });
+  fs.writeFileSync(abs, contents);
+}
+
+export function commitAll(repo: string, message: string): void {
+  git(repo, ['add', '-A']);
+  git(repo, ['-c', 'commit.gpgsign=false', 'commit', '-m', message]);
+}
+
+export async function withTempRepo(
+  fn: (repo: string) => Promise<void>,
+  options?: { readonly folderName?: string },
+): Promise<void> {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-test-'));
+  const repo = options?.folderName ? path.join(parent, options.folderName) : parent;
+  if (options?.folderName) {
+    fs.mkdirSync(repo, { recursive: true });
+  }
+  try {
+    git(repo, ['init', '-b', 'main']);
+    git(repo, ['config', 'user.email', 'gate-test@example.com']);
+    git(repo, ['config', 'user.name', 'Gate Test']);
+    git(repo, ['config', 'commit.gpgsign', 'false']);
+    await fn(repo);
+  } finally {
+    fs.rmSync(parent, { recursive: true, force: true });
+  }
+}
