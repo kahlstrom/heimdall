@@ -7,6 +7,7 @@ import { classifyCommandFailure, combinedOutput, type RunCommandFn } from './com
 import {
   filterFindingsToScope,
   findingsNotInBase,
+  identityMessage,
   mapArchitectureRenameMessage,
   matchFindingKey,
   partitionFindingsByScope,
@@ -442,7 +443,7 @@ function newVsBaseCommandStep(
   };
 }
 
-export const knipStep: GateStep = newVsBaseCommandStep('knip', parseKnipOutput, (message) => message);
+export const knipStep: GateStep = newVsBaseCommandStep('knip', parseKnipOutput, identityMessage);
 
 /**
  * Materialize the merge-base under HEIMDALL_TMP (itself under os.tmpdir), run

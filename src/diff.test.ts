@@ -7,6 +7,7 @@ import {
   configFileInDiff,
   filterFindingsToScope,
   findingsNotInBase,
+  identityMessage,
   loadDiffScope,
   mapArchitectureRenameMessage,
   matchFindingKey,
@@ -201,7 +202,8 @@ describe('findingsNotInBase', () => {
     addedLines: new Map(),
     renamedFrom: new Map(),
   };
-  const keyOf = (finding: Finding): string => matchFindingKey(finding, identityScope, SCOPE_ROOT);
+  const keyOf = (finding: Finding): string =>
+    matchFindingKey(finding, identityScope, SCOPE_ROOT, identityMessage);
 
   it('keeps a finding that is not in the base set, even on the same line', () => {
     const current = [hit('src/lib.ts', 'exports', 'helper', 4)];
@@ -238,7 +240,8 @@ describe('findingsNotInBase', () => {
   it('matches a finding in a renamed file under the old path', () => {
     const current = [hit('src/new.ts', 'exports', 'helper', 1)];
     const base = [hit('src/old.ts', 'exports', 'helper', 1)];
-    const renamedKeyOf = (finding: Finding): string => matchFindingKey(finding, renamedScope, SCOPE_ROOT);
+    const renamedKeyOf = (finding: Finding): string =>
+      matchFindingKey(finding, renamedScope, SCOPE_ROOT, identityMessage);
     expect(findingsNotInBase(current, base, renamedKeyOf)).toEqual([]);
   });
 

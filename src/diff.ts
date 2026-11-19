@@ -448,6 +448,11 @@ export function matchFindingFile(finding: Finding, scope: DiffScope, repoRoot: s
   return scope.renamedFrom.get(rel) ?? rel;
 }
 
+/** Leave the finding message unchanged (knip). */
+export function identityMessage(message: string): string {
+  return message;
+}
+
 /**
  * Digit runs that are not part of an identifier, so `foo2` stays distinct from
  * `foo3` while `on line 4 column 10` and `complexity of 15` collapse.
@@ -485,7 +490,7 @@ export function matchFindingKey(
   finding: Finding,
   scope: DiffScope,
   repoRoot: string,
-  messageOf: (message: string) => string = (message) => message,
+  messageOf: (message: string) => string,
 ): string {
   const file = matchFindingFile(finding, scope, repoRoot);
   const message = messageOf(finding.message);
