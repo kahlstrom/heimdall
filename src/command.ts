@@ -293,7 +293,7 @@ export function gateInterruptReason(signal: AbortSignal): string {
  * Shell exit 127 (command not found) names the label and `commandKey` so
  * the user can install the tool or fix the command. Steps pass
  * `steps.<name>.command` (the default); setup/teardown pass the top-level
- * key and the failing command (or its index). Shared by every command step,
+ * key and both the failing command and its index. Shared by every command step,
  * including baseline runs.
  */
 export function classifyCommandFailure(

@@ -85,28 +85,27 @@ async function runConfigured(
   return { command, result };
 }
 
+type ParseFailureFn = (error: string, result: CommandResult) => string;
+
 /**
  * Parse a tool's findings. Stderr (Node deprecation lines, `[DEP0040]`) is
- * attached to GATE ERROR messages, never to the parse. Unparseable output is
- * always GATE ERROR, including when the tool exits 0. Secrets is the
- * exception: the reason is a fixed message with the exit code only, so tool
- * stdout/stderr cannot leak a matched secret.
+ * attached to GATE ERROR messages by default, never to the parse. Unparseable
+ * output is always GATE ERROR, including when the tool exits 0. Pass
+ * `parseFailure` to choose the GATE ERROR text (for example to omit stderr).
  */
 function parseOrError<T>(
   name: StepName,
   parsed: Result<T>,
   result: CommandResult,
+  parseFailure: ParseFailureFn = parseFailureWithStderr,
 ): T | StepResult {
   if (!parsed.ok) {
-    return { kind: 'error', name, reason: parseFailureReason(name, parsed.error, result) };
+    return { kind: 'error', name, reason: parseFailure(parsed.error, result) };
   }
   return parsed.value;
 }
 
-function parseFailureReason(name: StepName, error: string, result: CommandResult): string {
-  if (name === 'secrets') {
-    return `secrets command exited ${result.exitCode ?? 'null'} with unparseable output`;
-  }
+function parseFailureWithStderr(error: string, result: CommandResult): string {
   const stderr = result.stderr.trim();
   return stderr ? `${error} (stderr: ${stderr.slice(0, 400)})` : error;
 }
@@ -156,19 +155,24 @@ function toolFailedWithoutFindings(
 
 /**
  * Run a configured command and parse findings. Callers decide how to read
- * stdout (knip uses stdout; jscpd may fall back to a report file).
+ * stdout (knip uses stdout; jscpd may fall back to a report file) and how
+ * to format a parse failure.
  */
 async function runAndParseFindings(
   ctx: StepContext,
   name: CommandStepName,
   parse: (output: string) => Result<Finding[]>,
-  stdoutOf: (result: CommandResult) => string = (result) => result.stdout,
+  options: {
+    readonly stdoutOf?: (result: CommandResult) => string;
+    readonly parseFailure?: ParseFailureFn;
+  } = {},
 ): Promise<{ command: string; result: CommandResult; findings: Finding[] } | StepResult> {
+  const stdoutOf = options.stdoutOf ?? ((result: CommandResult) => result.stdout);
   const ran = await runConfigured(ctx, name);
   if (!('result' in ran)) {
     return ran;
   }
-  const parsed = parseOrError(name, parse(stdoutOf(ran.result)), ran.result);
+  const parsed = parseOrError(name, parse(stdoutOf(ran.result)), ran.result, options.parseFailure);
   if (!Array.isArray(parsed)) {
     return parsed;
   }
@@ -186,7 +190,9 @@ function jsonToolStep(
     isEnabled: (config) => config.steps[name]?.enabled === true,
     async run(ctx) {
       const reportFile = reportFileName === undefined ? undefined : path.join(ctx.tmpDir, reportFileName);
-      const ran = await runAndParseFindings(ctx, name, parse, (result) => jsonStdout(result, reportFile));
+      const ran = await runAndParseFindings(ctx, name, parse, {
+        stdoutOf: (result) => jsonStdout(result, reportFile),
+      });
       if (!('command' in ran)) {
         return ran;
       }
@@ -494,6 +500,11 @@ export const jscpdStep: GateStep = jsonToolStep('jscpd', parseJscpdOutput, 'jscp
  */
 export const architectureStep: GateStep = newVsBaseCommandStep('architecture', parseArchitectureOutput);
 
+/** Parser message plus exit code; never tool stdout or stderr. */
+function secretsParseFailure(error: string, result: CommandResult): string {
+  return `${error} (exit ${result.exitCode ?? 'null'})`;
+}
+
 /**
  * secretlint JSON, scoped to added lines the same way eslint is. Findings
  * carry rule id, file, and line only — never secretlint's message text.
@@ -505,7 +516,9 @@ export const secretsStep: GateStep = {
     return config.steps.secrets?.enabled === true;
   },
   async run(ctx) {
-    const ran = await runAndParseFindings(ctx, 'secrets', parseSecretsOutput);
+    const ran = await runAndParseFindings(ctx, 'secrets', parseSecretsOutput, {
+      parseFailure: secretsParseFailure,
+    });
     if (!('command' in ran)) {
       return ran;
     }

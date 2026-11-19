@@ -201,7 +201,7 @@ ignored.
 database). Setup failure is a GATE ERROR. Teardown always runs after setup is
 attempted. Setup/teardown use the same default timeout as steps (`300000` ms).
 A missing setup/teardown command (shell exit 127) names the top-level key and
-the failing command (or its index), not `steps.setup.command`.
+the failing command and its index, not `steps.setup.command`.
 
 At least one step must be enabled.
 
@@ -226,8 +226,8 @@ A timeout is a GATE ERROR that names the step and the budget. A missing
 command (shell exit 127) is a GATE ERROR that names the step and the config
 key: `install the tool or fix steps.<name>.command`. Merge-base baseline runs
 use the same message. Setup and teardown use the same exit-127 GATE ERROR but
-name the top-level `setup` / `teardown` key and the failing command (or its
-index).
+name the top-level `setup` / `teardown` key and both the failing command and
+its index.
 
 | Step | Command notes |
 | --- | --- |
@@ -421,8 +421,8 @@ parsed). A runner crash with no parseable output is a **GATE ERROR**.
 - **secrets:** secretlint `--format json` (14.x), an ESLint-like
   `{ filePath, messages: [{ ruleId, loc.start.line }] }[]`. Each finding prints
   as `file:line [rule]` with no message text. Unparseable output or a non-zero
-  exit with no findings is a GATE ERROR that names the exit code only — never
-  tool stdout or stderr, which may hold a secret.
+  exit with no findings is a GATE ERROR that names the parser reason and the
+  exit code — never tool stdout or stderr, which may hold a secret.
 - **architecture:** dependency-cruiser `--output-type json` (18.x)
   `{ "summary": { "violations": [{ "from", "to", "rule": { "name", "severity" }, "cycle"? }] } }`.
   Only `severity: "error"` counts. Each finding is `[rule] from -> to`, or the
@@ -438,8 +438,8 @@ parsed). A runner crash with no parseable output is a **GATE ERROR**.
 
 If a command fails and the output cannot be parsed, that is a **GATE ERROR**.
 A missing command (shell exit 127) is a GATE ERROR that names the step and
-`steps.<name>.command`, or for setup/teardown the top-level key and the
-failing command (or its index). A step that times out, is killed by a
+`steps.<name>.command`, or for setup/teardown the top-level key and both
+the failing command and its index. A step that times out, is killed by a
 signal, or exits with a null code is never a pass: it is a GATE ERROR and
 the signal is named.
 On timeout Heimdall SIGTERMs the step's process group, then SIGKILLs after a

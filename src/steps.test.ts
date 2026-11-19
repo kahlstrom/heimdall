@@ -380,9 +380,32 @@ describe('secretsStep', () => {
     );
     expect(step.kind).toBe('error');
     if (step.kind === 'error') {
-      expect(step.reason).toBe('secrets command exited 1 with unparseable output');
+      expect(step.reason).toBe('secrets output is not JSON (exit 1)');
       expect(step.reason).not.toContain(SECRETS_LEAK);
       expect(JSON.stringify(step)).not.toContain(SECRETS_LEAK);
+    }
+  });
+
+  it('surfaces parser not-JSON and wrong-shape reasons on the GATE ERROR', async () => {
+    const config = cfg({ steps: { secrets: { command: 'secretlint --format json "**/*"' } } });
+    const run = (stdout: string) =>
+      secretsStep.run(
+        ctx({
+          config,
+          runCommand: async () => result({ exitCode: 1, stdout }),
+        }),
+      );
+
+    const notJson = await run('not-json');
+    expect(notJson.kind).toBe('error');
+    if (notJson.kind === 'error') {
+      expect(notJson.reason).toBe('secrets output is not JSON (exit 1)');
+    }
+
+    const wrongShape = await run('{"filePath":"a.ts","messages":[]}');
+    expect(wrongShape.kind).toBe('error');
+    if (wrongShape.kind === 'error') {
+      expect(wrongShape.reason).toBe('secrets JSON must be an array of file results (exit 1)');
     }
   });
 
