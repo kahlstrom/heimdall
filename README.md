@@ -220,7 +220,10 @@ Allowed names: `typecheck`, `tests`, `eslint`, `knip`, `jscpd`, `secrets`,
 | `command` | non-empty string | required when enabled | `"npx --no-install vitest run --reporter=json"` |
 | `timeoutMs` | positive integer | `300000` (5 minutes) | `120000` |
 
-A timeout is a GATE ERROR that names the step and the budget.
+A timeout is a GATE ERROR that names the step and the budget. A missing
+command (shell exit 127) is a GATE ERROR that names the step and the config
+key: `install the tool or fix steps.<name>.command`. Merge-base baseline runs
+use the same message.
 
 | Step | Command notes |
 | --- | --- |
@@ -391,6 +394,16 @@ Example jscpd command:
 npx --no-install jscpd src --reporters json --silent --output "$HEIMDALL_TMP" && cat "$HEIMDALL_TMP/jscpd-report.json"
 ```
 
+Example secrets and architecture commands (both off unless enabled; pin the
+tool versions in the command, and keep the rules files next to the config).
+secretlint 14.x reads `@secretlint/secretlint-rule-preset-recommend` from
+`.secretlintrc.json`; there is no separate v14 preset package:
+
+```text
+npx --no-install -p secretlint@14 secretlint --secretlintrc "$HEIMDALL_CONFIG_DIR/.secretlintrc.json" --format json "**/*"
+npx --no-install -p dependency-cruiser@18 depcruise --config "$HEIMDALL_CONFIG_DIR/.dependency-cruiser.cjs" src --output-type json
+```
+
 ## Tool output
 
 Heimdall parses tool output. It does not invent findings from a non-zero exit
@@ -401,6 +414,10 @@ parsed). A runner crash with no parseable output is a **GATE ERROR**.
 - **knip:** JSON reporter `{ "files": [...unused files], "issues": [...] }` including
   unused deps/devDeps, unlisted, unresolved, binaries, exports, types, enum/class
   members, and duplicates.
+- **secrets:** secretlint `--format json` (14.x), an ESLint-like
+  `{ filePath, messages: [{ ruleId, loc.start.line }] }[]`. Each finding prints
+  as `file:line [rule]` with no message text. Unparseable output is a GATE
+  ERROR; the no-findings error does not attach stdout, which may hold a secret.
 - **architecture:** dependency-cruiser `--output-type json` (18.x)
   `{ "summary": { "violations": [{ "from", "to", "rule": { "name", "severity" }, "cycle"? }] } }`.
   Only `severity: "error"` counts. Each finding is `[rule] from -> to`, or the
@@ -415,11 +432,12 @@ parsed). A runner crash with no parseable output is a **GATE ERROR**.
   runner exits non-zero, those keep the tests step **RED**.
 
 If a command fails and the output cannot be parsed, that is a **GATE ERROR**.
-A step that times out, is killed by a signal, or exits with a null code is never
-a pass: it is a GATE ERROR and the signal is named. On timeout Heimdall SIGTERMs
-the step's process group, then SIGKILLs after a short grace so child processes
-cannot linger. SIGINT or SIGTERM on Heimdall itself kills the running step tree,
-runs teardown, and exits non-zero.
+A missing command (shell exit 127) is a GATE ERROR that names the step and
+`steps.<name>.command`. A step that times out, is killed by a signal, or exits
+with a null code is never a pass: it is a GATE ERROR and the signal is named.
+On timeout Heimdall SIGTERMs the step's process group, then SIGKILLs after a
+short grace so child processes cannot linger. SIGINT or SIGTERM on Heimdall
+itself kills the running step tree, runs teardown, and exits non-zero.
 
 Knip's JSON reporter is parsed from stdout. The step materializes the merge-base
 in `$HEIMDALL_TMP/knip-base` (no stash) and runs the same knip command there.

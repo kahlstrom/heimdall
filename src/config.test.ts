@@ -47,8 +47,40 @@ describe('configs/example/heimdall.config.json', () => {
         eslint: { command: expect.stringContaining('npx --no-install') },
         knip: { command: expect.stringContaining('npx --no-install') },
         jscpd: { command: expect.stringContaining('npx --no-install') },
+        secrets: { command: expect.stringContaining('npx --no-install') },
+        architecture: { command: expect.stringContaining('npx --no-install') },
       },
     });
+  });
+
+  it('shows secrets and architecture present but disabled, with pinned commands and no personal paths', () => {
+    const exampleDir = path.dirname(EXAMPLE_CONFIG_PATH);
+    const parsed = parseGateConfig(JSON.parse(fs.readFileSync(EXAMPLE_CONFIG_PATH, 'utf8')), EXAMPLE_CONFIG_PATH);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) {
+      return;
+    }
+    const secretsCommand = parsed.value.steps.secrets?.command ?? '';
+    const architectureCommand = parsed.value.steps.architecture?.command ?? '';
+    expect(parsed.value.steps.secrets?.enabled).toBe(false);
+    expect(parsed.value.steps.architecture?.enabled).toBe(false);
+    expect(secretsCommand).toContain('secretlint@14');
+    expect(secretsCommand).toContain('--format json');
+    expect(secretsCommand).toContain('$HEIMDALL_CONFIG_DIR/.secretlintrc.json');
+    expect(architectureCommand).toContain('dependency-cruiser@18');
+    expect(architectureCommand).toContain('--output-type json');
+    expect(architectureCommand).toContain('$HEIMDALL_CONFIG_DIR/.dependency-cruiser.cjs');
+    for (const command of [secretsCommand, architectureCommand]) {
+      expect(command).toContain('npx --no-install');
+      expect(command).not.toMatch(/\/Users\/|\/home\/|~\/|[A-Za-z]:\\/);
+    }
+    const secretlintrc: unknown = JSON.parse(
+      fs.readFileSync(path.join(exampleDir, '.secretlintrc.json'), 'utf8'),
+    );
+    expect(secretlintrc).toMatchObject({
+      rules: [{ id: '@secretlint/secretlint-rule-preset-recommend' }],
+    });
+    expect(fs.existsSync(path.join(exampleDir, '.dependency-cruiser.cjs'))).toBe(true);
   });
 });
 
@@ -76,9 +108,9 @@ describe('heimdall.config.json', () => {
       expect(command).toContain('npx --no-install');
     }
     expect(own.value.steps.secrets).toBeUndefined();
-    expect(example.value.steps.secrets).toBeUndefined();
     expect(own.value.steps.architecture).toBeUndefined();
-    expect(example.value.steps.architecture).toBeUndefined();
+    expect(example.value.steps.secrets?.enabled).toBe(false);
+    expect(example.value.steps.architecture?.enabled).toBe(false);
     expect(own.value.steps.jscpd?.command).toBe(example.value.steps.jscpd?.command);
     expect(own.value.steps.knip?.command).toContain('--production');
   });

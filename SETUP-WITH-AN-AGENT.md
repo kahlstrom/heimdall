@@ -129,7 +129,9 @@ Ask the user:
    heimdall-configs/
      my-app/
        heimdall.config.json
-       knip.json          # optional sibling, used as $HEIMDALL_CONFIG_DIR/knip.json
+       knip.json                 # optional sibling, used as $HEIMDALL_CONFIG_DIR/knip.json
+       .secretlintrc.json        # required when steps.secrets is enabled
+       .dependency-cruiser.cjs   # required when steps.architecture is enabled
      another-repo/
        heimdall.config.json
    ```
@@ -158,8 +160,9 @@ Ask the user:
 
 For each repo, read (don't change) its `package.json` scripts and existing
 tool configs (`tsconfig.json`, `eslint.config.*` or `.eslintrc*`,
-`vitest.config.*`, `jest.config.*`, `knip.json`, `.jscpd.json`, and the
-lockfile). Work out the **real** commands for each Heimdall step:
+`vitest.config.*`, `jest.config.*`, `knip.json`, `.jscpd.json`,
+`.secretlintrc.json`, `.dependency-cruiser.cjs`, and the lockfile). Work out
+the **real** commands for each Heimdall step:
 
 | Step | Use it only if | Typical command |
 | --- | --- | --- |
@@ -168,8 +171,9 @@ lockfile). Work out the **real** commands for each Heimdall step:
 | `eslint` | the repo has ESLint configured | `npx --no-install eslint . -f json` |
 | `knip` | the repo has knip installed | `npx --no-install knip --reporter json --no-progress` |
 | `jscpd` | the repo has jscpd installed | `npx --no-install jscpd src --reporters json --silent --output "$HEIMDALL_TMP" && cat "$HEIMDALL_TMP/jscpd-report.json"` |
-| `architecture` | the repo has dependency-cruiser installed | `npx --no-install depcruise src --output-type json` |
-| `line-checks` | always available, built in | omit it (no-silencing stays on) or set `true` for the stricter extras |
+| `secrets` | the repo has secretlint 14.x | `npx --no-install -p secretlint@14 secretlint --secretlintrc "$HEIMDALL_CONFIG_DIR/.secretlintrc.json" --format json "**/*"` |
+| `architecture` | the repo has dependency-cruiser 18.x | `npx --no-install -p dependency-cruiser@18 depcruise --config "$HEIMDALL_CONFIG_DIR/.dependency-cruiser.cjs" src --output-type json` |
+| `line-checks` | always available, built in | omit it (no-silencing stays on) or set `true` for the stricter extras. When `secrets` is enabled, new `secretlint-disable` and `gitleaks:allow` comments are flagged too (the finding names the kind only, never the rest of the line). |
 
 Rules for this step:
 
@@ -181,8 +185,11 @@ Rules for this step:
 - Use the JSON reporters shown above. Heimdall parses tool output, and
   unparseable output from a failing command is a GATE ERROR.
 - **Ask before adding a tool the repo does not have** (for example knip,
-  jscpd, or dependency-cruiser). Adding one changes the project's
-  dependencies, so it needs the user's OK under the hard rules.
+  jscpd, secretlint, or dependency-cruiser). Adding one changes the project's
+  dependencies, so it needs the user's OK under the hard rules. Pin secretlint
+  14.x (with `@secretlint/secretlint-rule-preset-recommend` in
+  `.secretlintrc.json`) and dependency-cruiser 18.x in the command; do not
+  leave `npx` unpinned.
 - **Ask which folders to protect.** Anything listed in `protectedPaths`
   (globs such as `"src/generated/**"` or `"migrations/**"`) turns RED if a
   change touches it. Leave it empty if the user has none.
@@ -202,7 +209,9 @@ Rules for this step:
   `"file > full test title"`.
 - If the repo already has its own knip or jscpd config you want Heimdall to
   use, you can keep a copy next to the Heimdall config and reference it as
-  `"$HEIMDALL_CONFIG_DIR/knip.json"`.
+  `"$HEIMDALL_CONFIG_DIR/knip.json"`. For `secrets` and `architecture`, keep
+  `.secretlintrc.json` and `.dependency-cruiser.cjs` next to the Heimdall
+  config the same way. A missing or empty rules file is a GATE ERROR.
 
 A minimal config for a TypeScript + Vitest + ESLint repo:
 
@@ -235,17 +244,20 @@ Then:
 
 - **GREEN:** report it with the summary pasted exactly.
 - **RED:** paste the findings and summary exactly, then explain them. Lint,
-  jscpd, knip, architecture and line-checks only count **new** problems versus the
-  merge-base, so on a branch with no changes those should be quiet. Tests and
+  secrets, jscpd, knip, architecture and line-checks only count **new** problems versus the
+  merge-base, so on a branch with no changes those should be quiet. Secrets
+  findings print as `file:line [rule]` with no message text. Tests and
   typecheck run in full, so failures that already exist on the base branch
   will show here. Tell the user what is failing and ask what they want to do.
   Do **not** fix code, edit or delete tests, add flakes, disable steps, or
   loosen the config to get GREEN unless the user explicitly OKs that change.
 - **GATE ERROR:** stop and report the full error exactly. Common causes are a
   config that was not found (the message lists every path tried), an unknown
-  config key, a missing tool, unparseable tool output, a timeout, a failed
-  setup command, or a base guard (`requireParentBase`, or more changed files
-  than `maxChangedFiles`). Suggest a fix, but do not apply it without asking.
+  config key, a missing tool (shell exit 127 names the step and
+  `steps.<name>.command`), a missing or empty secrets/architecture rules file,
+  unparseable tool output, a timeout, a failed setup command, or a base guard
+  (`requireParentBase`, or more changed files than `maxChangedFiles`). Suggest
+  a fix, but do not apply it without asking.
   Never pass `--allow-wide` or set `HEIMDALL_ALLOW_WIDE=1` or
   `HEIMDALL_ALLOW_CONFIG_CHANGE=1` on your own.
 

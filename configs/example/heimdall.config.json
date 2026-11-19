@@ -28,6 +28,16 @@
       "command": "npx --no-install jscpd src --reporters json --silent --output \"$HEIMDALL_TMP\" && cat \"$HEIMDALL_TMP/jscpd-report.json\"",
       "timeoutMs": 300000
     },
+    "secrets": {
+      "enabled": false,
+      "command": "npx --no-install -p secretlint@14 secretlint --secretlintrc \"$HEIMDALL_CONFIG_DIR/.secretlintrc.json\" --format json \"**/*\"",
+      "timeoutMs": 300000
+    },
+    "architecture": {
+      "enabled": false,
+      "command": "npx --no-install -p dependency-cruiser@18 depcruise --config \"$HEIMDALL_CONFIG_DIR/.dependency-cruiser.cjs\" src --output-type json",
+      "timeoutMs": 300000
+    },
     "line-checks": {
       "enabled": true,
       "allowSilencing": []

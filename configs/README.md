@@ -9,9 +9,13 @@ configs/
   README.md
   example/                  # copy this
     heimdall.config.json
+    .secretlintrc.json      # sibling rules file for steps.secrets
+    .dependency-cruiser.cjs # sibling rules file for steps.architecture
   my-app/                   # used when you run heimdall inside ~/Projects/my-app
     heimdall.config.json
     knip.json               # optional sibling; referenced as $HEIMDALL_CONFIG_DIR/knip.json
+    .secretlintrc.json
+    .dependency-cruiser.cjs
 ```
 
 `$HEIMDALL_HOME` defaults to this `configs/` directory (resolved from the CLI
@@ -58,3 +62,25 @@ still set as aliases.
 Copy the example, then fill in the commands that repo actually uses and disable
 steps you do not want with `"enabled": false`. Unknown keys anywhere in the
 file are a GATE ERROR.
+
+## Pin optional tool versions and keep rules files next to the config
+
+`steps.secrets` and `steps.architecture` are off in the example
+(`"enabled": false`). When you turn one on, pin the tool in the command so a
+missing binary is a GATE ERROR instead of `npx` fetching an unpinned latest:
+
+- **secrets:** secretlint **14.x**, with `@secretlint/secretlint-rule-preset-recommend`
+  in `.secretlintrc.json` (secretlint 14.x ships that preset; keep the rule id
+  in the rc file).
+- **architecture:** dependency-cruiser **18.x**.
+
+Keep the rules files next to that repo's Heimdall config and point the command
+at them with `$HEIMDALL_CONFIG_DIR`:
+
+- `.secretlintrc.json`
+- `.dependency-cruiser.cjs`
+
+A missing or empty rules file is a **GATE ERROR**: the tool exits without
+JSON findings Heimdall can parse, so the step cannot pass. Do not put personal
+paths (`/Users/...`, `/home/...`) in the command; use `$HEIMDALL_CONFIG_DIR`
+and `$HEIMDALL_TMP`.
