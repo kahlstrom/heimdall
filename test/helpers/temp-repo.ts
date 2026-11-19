@@ -1,7 +1,8 @@
 /**
  * Temp git repos for gate tests. Always cleaned up, even on failure.
- * Linked worktrees and submodules are created next to the main checkout
- * so the helper's `finally` still deletes them with the temp parent.
+ * Linked worktrees are created next to the main checkout so the helper's
+ * `finally` still deletes them with the temp parent. Submodules are created
+ * inside the superproject (for example `vendor/lib`).
  */
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -23,9 +24,15 @@ export function commitAll(repo: string, message: string): void {
   git(repo, ['-c', 'commit.gpgsign=false', 'commit', '-m', message]);
 }
 
+/**
+ * Create a throwaway repo. `folderName` nests it under the temp parent so
+ * siblings (worktrees, a separate git dir) share that cleanup. `initArgs`
+ * are extra `git init` flags after `-b main` (for example
+ * `--separate-git-dir` with a path under the temp parent).
+ */
 export async function withTempRepo(
   fn: (repo: string) => Promise<void>,
-  options?: { readonly folderName?: string },
+  options?: { readonly folderName?: string; readonly initArgs?: readonly string[] },
 ): Promise<void> {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-test-'));
   const repo = options?.folderName ? path.join(parent, options.folderName) : parent;
@@ -33,7 +40,7 @@ export async function withTempRepo(
     fs.mkdirSync(repo, { recursive: true });
   }
   try {
-    git(repo, ['init', '-b', 'main']);
+    git(repo, ['init', '-b', 'main', ...(options?.initArgs ?? [])]);
     git(repo, ['config', 'user.email', 'gate-test@example.com']);
     git(repo, ['config', 'user.name', 'Gate Test']);
     git(repo, ['config', 'commit.gpgsign', 'false']);

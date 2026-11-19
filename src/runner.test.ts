@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -85,6 +86,34 @@ function expectSameFile(actual: string | undefined, expected: string): void {
     return;
   }
   expect(fs.realpathSync(actual)).toBe(fs.realpathSync(expected));
+}
+
+/**
+ * Put a `git` shim first on PATH that fails `--git-common-dir` and forwards
+ * every other invocation to the real git. Proves `--config` does not depend
+ * on home-config name lookup.
+ */
+async function withGitCommonDirBlocked(fn: () => Promise<void>): Promise<void> {
+  const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-fake-git-'));
+  fs.writeFileSync(
+    path.join(bin, 'git'),
+    `#!/bin/sh
+for arg in "$@"; do
+  if [ "$arg" = "--git-common-dir" ]; then
+    echo "git-common-dir blocked" >&2
+    exit 1
+  fi
+done
+exec ${JSON.stringify(realGit)} "$@"
+`,
+    { mode: 0o755 },
+  );
+  try {
+    await withProcessEnv({ PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` }, fn);
+  } finally {
+    fs.rmSync(bin, { recursive: true, force: true });
+  }
 }
 
 async function withLoosenedConfig(
@@ -528,12 +557,12 @@ describe('runGate exit codes', () => {
       await withTempRepo(async (repo) => {
         writeRepoFile(repo, 'src/a.ts', 'export const a = 1;\n');
         commitAll(repo, 'base');
-        git(repo, ['checkout', '-q', '-b', 'feat-s03']);
+        git(repo, ['checkout', '-q', '-b', 'feature']);
         writeRepoFile(repo, 'src/a.ts', 'export const a = 2;\n');
         commitAll(repo, 'feat');
         git(repo, ['checkout', '-q', 'main']);
-        const worktree = addWorktree(repo, 'foo-feat-s03', 'feat-s03');
-        writeHomeGateConfig(gateHome, 'foo-feat-s03', PASSING_TESTS_CONFIG);
+        const worktree = addWorktree(repo, 'foo-feature', 'feature');
+        writeHomeGateConfig(gateHome, 'foo-feature', PASSING_TESTS_CONFIG);
         const configPath = writeHomeGateConfig(gateHome, 'foo', PASSING_TESTS_CONFIG);
         const outcome = await runGate({ cwd: worktree, ...mockPass() });
         expect(outcome.kind).toBe('green');
@@ -547,7 +576,7 @@ describe('runGate exit codes', () => {
       await withTempRepo(async (repo) => {
         writeRepoFile(repo, 'src/a.ts', 'export const a = 1;\n');
         commitAll(repo, 'base');
-        const worktree = addWorktree(repo, 'foo-feat-s03');
+        const worktree = addWorktree(repo, 'foo-feature');
         const outcome = await runGate({ cwd: worktree });
         expect(outcome.kind).toBe('error');
         expect(outcome.exitCode).toBe(2);
@@ -556,7 +585,7 @@ describe('runGate exit codes', () => {
           expect(outcome.reason).toContain(path.join(worktree, 'heimdall.config.json'));
           expect(outcome.reason).toContain(path.join(gateHome, 'foo', 'heimdall.config.json'));
           expect(outcome.reason).toContain(path.join(gateHome, 'foo', 'gate.config.json'));
-          expect(outcome.reason).not.toContain(path.join(gateHome, 'foo-feat-s03', 'heimdall.config.json'));
+          expect(outcome.reason).not.toContain(path.join(gateHome, 'foo-feature', 'heimdall.config.json'));
         }
       }, { folderName: 'foo' });
     });
@@ -670,6 +699,31 @@ describe('runGate exit codes', () => {
           expect(outcome.warnings).toContain('GATE_HOME is deprecated; use HEIMDALL_HOME');
         }, ['HEIMDALL_HOME']);
       }, null);
+    });
+  });
+
+  it('does not require git common-dir lookup when --config is given', async () => {
+    await withTempRepo(async (repo) => {
+      writeGateConfig(repo, PASSING_TESTS_CONFIG, 'team.gate.json');
+      commitAll(repo, 'base');
+      git(repo, ['checkout', '-q', '-b', 'feat']);
+      writeRepoFile(repo, 'src/new.ts', 'export const value = 1;\n');
+      commitAll(repo, 'feat');
+      await withGitCommonDirBlocked(async () => {
+        const blocked = await runGate({ cwd: repo, ...mockPass() });
+        expect(blocked.kind).toBe('error');
+        if (blocked.kind === 'error') {
+          expect(blocked.reason).toMatch(/cannot resolve git common dir/);
+          expect(blocked.reason).toMatch(/git-common-dir blocked/);
+        }
+        const outcome = await runGate({
+          cwd: repo,
+          configPath: 'team.gate.json',
+          ...mockPass(),
+        });
+        expect(outcome.kind).toBe('green');
+        expectSameFile(outcome.configPath, path.join(repo, 'team.gate.json'));
+      });
     });
   });
 

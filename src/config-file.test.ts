@@ -204,21 +204,21 @@ describe('resolveConfigPath', () => {
   });
 
   it('uses the git common-dir name, not the worktree folder basename', () => {
-    withLookupDirs('foo-feat-s03', ({ gitRoot, gateHome, env, lookupName }) => {
+    withLookupDirs('foo-feature', ({ gitRoot, gateHome, env, lookupName }) => {
       const homeConfig = writeConfig(path.join(gateHome, 'foo', DEFAULT_CONFIG_NAME));
-      writeConfig(path.join(gateHome, 'foo-feat-s03', DEFAULT_CONFIG_NAME));
+      writeConfig(path.join(gateHome, 'foo-feature', DEFAULT_CONFIG_NAME));
       const looked = resolveConfigPath(gitRoot, gitRoot, lookupName, undefined, env);
       expect(looked).toEqual({ ok: true, value: homeConfig });
     }, 'foo');
   });
 
   it('lists only the common-dir name in a GATE ERROR, not the worktree folder basename', () => {
-    withLookupDirs('foo-feat-s03', ({ gitRoot, gateHome, env, lookupName }) => {
+    withLookupDirs('foo-feature', ({ gitRoot, gateHome, env, lookupName }) => {
       const looked = resolveConfigPath(gitRoot, gitRoot, lookupName, undefined, env);
       expect(looked.ok).toBe(false);
       if (!looked.ok) {
         expect(looked.error).toContain(path.join(gateHome, 'foo', DEFAULT_CONFIG_NAME));
-        expect(looked.error).not.toContain(path.join(gateHome, 'foo-feat-s03', DEFAULT_CONFIG_NAME));
+        expect(looked.error).not.toContain(path.join(gateHome, 'foo-feature', DEFAULT_CONFIG_NAME));
       }
     }, 'foo');
   });

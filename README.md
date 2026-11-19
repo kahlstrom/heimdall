@@ -154,7 +154,7 @@ tried as-is and then lowercased (`~/Projects/MyApp` finds
   work-tree folder name (`--show-toplevel`)
 
 The work-tree folder basename is not a separate lookup candidate, so
-`heimdall` inside a worktree of `foo` at `foo-feat-s03` still loads
+`heimdall` inside a worktree of `foo` at `foo-feature` still loads
 `$HEIMDALL_HOME/foo/`.
 
 `--config` is exclusive: only that path is used. A missing, invalid, or
