@@ -470,21 +470,116 @@ function checkoutNodeModulesDirs(fromRepo: string): string[] {
   return found;
 }
 
+function realpathOrResolve(abs: string): string {
+  try {
+    return fs.realpathSync(abs);
+  } catch {
+    return path.resolve(abs);
+  }
+}
+
+/** Relative path from `parent` to `target` when `target` is inside `parent` (including `parent` itself). */
+function pathInside(parent: string, target: string): string | undefined {
+  const rel = path.relative(parent, target);
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    return undefined;
+  }
+  return rel;
+}
+
+function shareNodeModulesError(cause: unknown): Result<never> {
+  return err(`cannot share node_modules with the baseline copy: ${errorMessage(cause)}`);
+}
+
+/**
+ * Repo-relative source of a workspace package: the entry's real path is inside
+ * the live checkout but not under a node_modules directory. Third-party
+ * installs resolve inside node_modules (or outside the repo) and return
+ * undefined so they can be shared as-is.
+ */
+function workspaceSourceRel(fromRoot: string, entryPath: string): string | undefined {
+  let real: string;
+  try {
+    real = fs.realpathSync(entryPath);
+  } catch {
+    return undefined;
+  }
+  const rel = pathInside(fromRoot, real);
+  if (rel === undefined || rel.split(path.sep).includes('node_modules')) {
+    return undefined;
+  }
+  return rel;
+}
+
+/**
+ * Overlay each live node_modules onto the materialized copy. Third-party
+ * entries stay symlinks into the live install (not copied). Workspace
+ * packages whose real target is inside the live checkout are retargeted at
+ * the matching path in `dest`, so tools in the copy see merge-base source.
+ * Live node_modules is never written.
+ */
 function shareNodeModules(fromRepo: string, dest: string): Result<void> {
-  for (const src of checkoutNodeModulesDirs(fromRepo)) {
-    const rel = path.relative(fromRepo, src);
-    if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) {
+  const fromRoot = realpathOrResolve(fromRepo);
+  const destRoot = realpathOrResolve(dest);
+
+  const populate = (srcDir: string, destDir: string): Result<void> => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(srcDir, { withFileTypes: true });
+      fs.mkdirSync(destDir, { recursive: true });
+    } catch (cause) {
+      return shareNodeModulesError(cause);
+    }
+    for (const entry of entries) {
+      const srcEntry = path.join(srcDir, entry.name);
+      const destEntry = path.join(destDir, entry.name);
+      if (fs.existsSync(destEntry)) {
+        continue;
+      }
+      const workspaceRel = workspaceSourceRel(fromRoot, srcEntry);
+      if (workspaceRel !== undefined) {
+        const destTarget = path.join(destRoot, workspaceRel);
+        if (!fs.existsSync(destTarget)) {
+          continue;
+        }
+        try {
+          fs.symlinkSync(destTarget, destEntry);
+        } catch (cause) {
+          return shareNodeModulesError(cause);
+        }
+        continue;
+      }
+      if (entry.name.startsWith('@') && isDirectoryLike(entry, srcEntry)) {
+        const nested = populate(srcEntry, destEntry);
+        if (!nested.ok) {
+          return nested;
+        }
+        continue;
+      }
+      try {
+        fs.symlinkSync(srcEntry, destEntry);
+      } catch (cause) {
+        return shareNodeModulesError(cause);
+      }
+    }
+    return ok(undefined);
+  };
+
+  for (const src of checkoutNodeModulesDirs(fromRoot)) {
+    const rel = pathInside(fromRoot, src);
+    if (rel === undefined) {
       continue;
     }
-    const destNm = path.join(dest, rel);
+    const destNm = path.join(destRoot, rel);
     if (fs.existsSync(destNm)) {
       continue;
     }
-    try {
-      fs.mkdirSync(path.dirname(destNm), { recursive: true });
-      fs.symlinkSync(src, destNm);
-    } catch (cause) {
-      return err(`cannot share node_modules with knip baseline: ${errorMessage(cause)}`);
+    if (!fs.existsSync(path.dirname(destNm))) {
+      continue;
+    }
+    const populated = populate(src, destNm);
+    if (!populated.ok) {
+      return populated;
     }
   }
   return ok(undefined);

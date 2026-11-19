@@ -1069,18 +1069,17 @@ describe('knipStep', () => {
     });
   });
 
-  it('links workspace package node_modules into the knip baseline', async () => {
+  it('shares third-party packages from the live checkout into the knip baseline', async () => {
     await withKnipRepo(async ({ repo, tmpDir, scope }) => {
       writeRepoFile(repo, '.gitignore', 'node_modules\n');
       fs.mkdirSync(path.join(repo, 'node_modules', 'root-dep'), { recursive: true });
-      fs.mkdirSync(path.join(repo, 'packages', 'app', 'node_modules', 'app-dep'), { recursive: true });
-      writeRepoFile(repo, 'packages/app/package.json', JSON.stringify({ name: 'app' }));
+      writeRepoFile(repo, 'node_modules/root-dep/id.txt', 'live-dep\n');
       const current = knipReport({
         files: [],
         issues: [{ file: 'src/lib.ts', exports: [{ name: 'helper', line: 1 }] }],
       });
       const base = knipReport({ files: [], issues: [] });
-      let sawLinks = false;
+      let sawShare = false;
       const step = await knipStep.run(
         ctx({
           cwd: repo,
@@ -1090,22 +1089,19 @@ describe('knipStep', () => {
           runCommand: async (...args: Parameters<StepContext['runCommand']>) => {
             const cwd = args[1];
             if (cwd.includes('knip-base')) {
-              const rootNm = path.join(cwd, 'node_modules');
-              const pkgNm = path.join(cwd, 'packages', 'app', 'node_modules');
-              expect(fs.lstatSync(rootNm).isSymbolicLink()).toBe(true);
-              expect(fs.lstatSync(pkgNm).isSymbolicLink()).toBe(true);
-              expect(fs.realpathSync(rootNm)).toBe(fs.realpathSync(path.join(repo, 'node_modules')));
-              expect(fs.realpathSync(pkgNm)).toBe(
-                fs.realpathSync(path.join(repo, 'packages', 'app', 'node_modules')),
+              const destDep = path.join(cwd, 'node_modules', 'root-dep');
+              expect(fs.lstatSync(destDep).isSymbolicLink()).toBe(true);
+              expect(fs.realpathSync(destDep)).toBe(
+                fs.realpathSync(path.join(repo, 'node_modules', 'root-dep')),
               );
-              sawLinks = true;
+              sawShare = true;
               return result({ exitCode: 1, stdout: base });
             }
             return result({ exitCode: 1, stdout: current });
           },
         }),
       );
-      expect(sawLinks).toBe(true);
+      expect(sawShare).toBe(true);
       expect(step.kind).toBe('fail');
     });
   });
@@ -1551,6 +1547,11 @@ describe('architectureStep', () => {
   });
 });
 
+function symlinkRel(fromAbs: string, toAbs: string): void {
+  fs.mkdirSync(path.dirname(fromAbs), { recursive: true });
+  fs.symlinkSync(path.relative(path.dirname(fromAbs), toAbs), fromAbs);
+}
+
 function parseFakeTsv(output: string): Result<Finding[]> {
   const findings: Finding[] = [];
   for (const line of output.split('\n')) {
@@ -1669,6 +1670,97 @@ describe('findingsAtMergeBase', () => {
             );
           }
         }
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it('resolves workspace packages in the baseline copy to merge-base source, not the live checkout', async () => {
+    await withTempRepo(async (repo) => {
+      writeRepoFile(repo, '.gitignore', 'node_modules\n');
+      writeRepoFile(repo, 'packages/pkg/index.js', "export const v = 'base';\n");
+      writeRepoFile(repo, 'packages/app/index.js', "export const app = 'base';\n");
+      commitAll(repo, 'base');
+      const mergeBaseSha = git(repo, ['rev-parse', 'HEAD']).trim();
+      git(repo, ['checkout', '-q', '-b', 'feat']);
+      writeRepoFile(repo, 'packages/pkg/index.js', "export const v = 'branch';\n");
+      writeRepoFile(repo, 'packages/added/index.js', "export const v = 'added';\n");
+      commitAll(repo, 'feat');
+
+      symlinkRel(path.join(repo, 'node_modules', '@scope', 'pkg'), path.join(repo, 'packages', 'pkg'));
+      symlinkRel(path.join(repo, 'node_modules', '@scope', 'added'), path.join(repo, 'packages', 'added'));
+      symlinkRel(
+        path.join(repo, 'packages', 'app', 'node_modules', '@scope', 'pkg'),
+        path.join(repo, 'packages', 'pkg'),
+      );
+      fs.mkdirSync(path.join(repo, 'node_modules', '@scope', 'other'), { recursive: true });
+      writeRepoFile(repo, 'node_modules/@scope/other/id.txt', 'third-party\n');
+      fs.mkdirSync(path.join(repo, 'node_modules', 'loose-dep'), { recursive: true });
+      writeRepoFile(repo, 'node_modules/loose-dep/id.txt', 'loose\n');
+      const livePkgLink = fs.readlinkSync(path.join(repo, 'node_modules', '@scope', 'pkg'));
+      const liveAddedLink = fs.readlinkSync(path.join(repo, 'node_modules', '@scope', 'added'));
+      const liveOtherStat = fs.statSync(path.join(repo, 'node_modules', '@scope', 'other', 'id.txt'));
+
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-base-findings-'));
+      try {
+        const dest = path.join(tmpDir, 'jscpd-base');
+        let sawBaseCopy = false;
+        const parsed = await findingsAtMergeBase(
+          ctx({
+            cwd: repo,
+            tmpDir,
+            scope: { ...emptyScope, mergeBaseSha },
+            config: cfg({ steps: { jscpd: { command: 'fake-jscpd' } } }),
+            runCommand: async (command, cwd) => {
+              expect(command).toBe('fake-jscpd');
+              expect(cwd).toBe(dest);
+              expect(fs.readFileSync(path.join(cwd, 'packages', 'pkg', 'index.js'), 'utf8')).toBe(
+                "export const v = 'base';\n",
+              );
+              expect(fs.readFileSync(path.join(cwd, 'node_modules', '@scope', 'pkg', 'index.js'), 'utf8')).toBe(
+                "export const v = 'base';\n",
+              );
+              expect(fs.realpathSync(path.join(cwd, 'node_modules', '@scope', 'pkg'))).toBe(
+                fs.realpathSync(path.join(cwd, 'packages', 'pkg')),
+              );
+              expect(
+                fs.readFileSync(path.join(cwd, 'packages', 'app', 'node_modules', '@scope', 'pkg', 'index.js'), 'utf8'),
+              ).toBe("export const v = 'base';\n");
+              expect(fs.existsSync(path.join(cwd, 'node_modules', '@scope', 'added'))).toBe(false);
+              expect(fs.lstatSync(path.join(cwd, 'node_modules', 'loose-dep')).isSymbolicLink()).toBe(true);
+              expect(fs.realpathSync(path.join(cwd, 'node_modules', 'loose-dep'))).toBe(
+                fs.realpathSync(path.join(repo, 'node_modules', 'loose-dep')),
+              );
+              expect(fs.lstatSync(path.join(cwd, 'node_modules', '@scope', 'other')).isSymbolicLink()).toBe(true);
+              expect(fs.realpathSync(path.join(cwd, 'node_modules', '@scope', 'other'))).toBe(
+                fs.realpathSync(path.join(repo, 'node_modules', '@scope', 'other')),
+              );
+              expect(fs.lstatSync(path.join(cwd, 'node_modules')).isSymbolicLink()).toBe(false);
+              fs.writeFileSync(path.join(cwd, 'node_modules', 'probe.txt'), 'dest-only\n');
+              expect(fs.existsSync(path.join(repo, 'node_modules', 'probe.txt'))).toBe(false);
+              sawBaseCopy = true;
+              return result({ exitCode: 0, stdout: 'src/a.ts\tduplicate\tclone\t1\n' });
+            },
+          }),
+          'jscpd',
+          'fake-jscpd',
+          parseFakeTsv,
+        );
+        expect(sawBaseCopy).toBe(true);
+        expect(parsed).toEqual([{ step: 'jscpd', file: 'src/a.ts', line: 1, rule: 'duplicate', message: 'clone' }]);
+        expect(fs.readFileSync(path.join(repo, 'packages', 'pkg', 'index.js'), 'utf8')).toBe(
+          "export const v = 'branch';\n",
+        );
+        expect(fs.readlinkSync(path.join(repo, 'node_modules', '@scope', 'pkg'))).toBe(livePkgLink);
+        expect(fs.readlinkSync(path.join(repo, 'node_modules', '@scope', 'added'))).toBe(liveAddedLink);
+        expect(fs.readFileSync(path.join(repo, 'node_modules', '@scope', 'other', 'id.txt'), 'utf8')).toBe(
+          'third-party\n',
+        );
+        expect(fs.statSync(path.join(repo, 'node_modules', '@scope', 'other', 'id.txt')).mtimeMs).toBe(
+          liveOtherStat.mtimeMs,
+        );
+        expect(fs.existsSync(path.join(repo, 'node_modules', 'probe.txt'))).toBe(false);
       } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });
       }
