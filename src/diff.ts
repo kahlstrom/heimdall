@@ -3,7 +3,8 @@
  * changed versus the merge-base of the configured base ref (plus untracked files).
  * ESLint keeps those added-line hits and also uses findingsNotInBase for leftovers
  * on untouched lines. Knip and architecture run on the whole project and keep
- * findings that do not exist at the merge-base.
+ * findings that do not exist at the merge-base. Git renames (`-M`) are paired in
+ * `renamedFrom` so a finding in the new path matches the merge-base under the old.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -277,10 +278,14 @@ export function loadDiffScope(repoRoot: string, base: ResolvedBaseRef): Result<D
 
   const addedByFile = new Map<string, Set<number>>();
   const changedFiles = new Set<string>();
+  const renamedFrom = new Map<string, string>();
   for (const entry of changed.value) {
     changedFiles.add(entry.path);
     if (entry.origPath !== undefined) {
       changedFiles.add(entry.origPath);
+    }
+    if (entry.status === 'R' && entry.origPath !== undefined && entry.origPath !== entry.path) {
+      renamedFrom.set(entry.path, entry.origPath);
     }
     const added = addedLinesForChangedPath(
       repoRoot,
@@ -317,6 +322,7 @@ export function loadDiffScope(repoRoot: string, base: ResolvedBaseRef): Result<D
     mergeBaseSha: base.mergeBaseSha,
     changedFiles,
     addedLines: addedByFile,
+    renamedFrom,
   });
 }
 
@@ -419,32 +425,88 @@ export function filterFindingsToScope(
 }
 
 /**
- * Identity for new-vs-base comparison. Line is omitted so an unused helper
- * left on an unchanged line still matches the same symbol at HEAD. `fileOf`
- * canonicalizes the file when the same repo path is reported under different
- * roots (live checkout vs merge-base copy).
+ * Rewrite absolute paths under `root` to repo-relative paths. Relative paths
+ * and paths outside `root` are left as reported. Call this while `root` still
+ * exists (the merge-base copy).
  */
-function findingIdentity(finding: Finding, fileOf: (hit: Finding) => string): string {
-  return `${finding.step}\0${fileOf(finding)}\0${finding.rule}\0${finding.message}`;
+export function relativizeFindingFiles(findings: readonly Finding[], root: string): Finding[] {
+  return findings.map((finding) => {
+    const rel = toRepoPath(finding.file, root);
+    if (rel === undefined || rel === finding.file) {
+      return finding;
+    }
+    return { ...finding, file: rel };
+  });
+}
+
+/**
+ * Repo-relative path, then the pre-rename path when this file was moved
+ * (`renamedFrom` is new → old). Base findings already sit on the old path.
+ */
+export function matchFindingFile(finding: Finding, scope: DiffScope, repoRoot: string): string {
+  const rel = toRepoPath(finding.file, repoRoot) ?? finding.file;
+  return scope.renamedFrom.get(rel) ?? rel;
+}
+
+/**
+ * Longest new path first so `src/a2.ts` is not rewritten as a prefix of `src/a.ts`.
+ */
+function rewriteRenamedPaths(text: string, renamedFrom: ReadonlyMap<string, string>): string {
+  if (renamedFrom.size === 0) {
+    return text;
+  }
+  const pairs = [...renamedFrom.entries()].sort((left, right) => right[0].length - left[0].length);
+  let result = text;
+  for (const [from, to] of pairs) {
+    result = result.split(from).join(to);
+  }
+  return result;
+}
+
+/**
+ * Digit runs that are not part of an identifier, so `foo2` stays distinct from
+ * `foo3` while `on line 4 column 10` and `complexity of 15` collapse.
+ */
+export function stableEslintMessage(message: string): string {
+  return message.replace(/\b\d+\b/g, '#');
+}
+
+/**
+ * Identity for new-vs-base comparison. Line is omitted so an unused helper
+ * left on an unchanged line still matches the same symbol at HEAD. File is
+ * repo-relative and mapped through git rename. `messageOf` stabilizes tool
+ * wording (ESLint digit runs); paths inside the message follow the same rename
+ * map so architecture `from -> to` edges still match.
+ */
+export function matchFindingKey(
+  finding: Finding,
+  scope: DiffScope,
+  repoRoot: string,
+  messageOf: (message: string) => string = (message) => message,
+): string {
+  const file = matchFindingFile(finding, scope, repoRoot);
+  const message = messageOf(rewriteRenamedPaths(finding.message, scope.renamedFrom));
+  return `${finding.step}\0${file}\0${finding.rule}\0${finding.messageId ?? ''}\0${message}`;
 }
 
 /**
  * Findings in `current` with no matching identity in `base`, compared as a
- * multiset: a second identical step+file+rule+message is new.
+ * multiset: a second identical key is new.
  */
 export function findingsNotInBase(
   current: readonly Finding[],
   base: readonly Finding[],
-  fileOf: (finding: Finding) => string = (finding) => finding.file,
+  keyOf: (finding: Finding) => string = (finding) =>
+    `${finding.step}\0${finding.file}\0${finding.rule}\0${finding.message}`,
 ): Finding[] {
   const remaining = new Map<string, number>();
   for (const finding of base) {
-    const id = findingIdentity(finding, fileOf);
+    const id = keyOf(finding);
     remaining.set(id, (remaining.get(id) ?? 0) + 1);
   }
   const extra: Finding[] = [];
   for (const finding of current) {
-    const id = findingIdentity(finding, fileOf);
+    const id = keyOf(finding);
     const count = remaining.get(id) ?? 0;
     if (count > 0) {
       remaining.set(id, count - 1);

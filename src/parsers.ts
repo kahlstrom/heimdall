@@ -85,11 +85,13 @@ function parseEslintJson(value: unknown): Result<EslintParsed> {
     const line = asNumber(message.line, 0);
     const rule = asString(message.ruleId, 'eslint');
     const text = asString(message.message, severity >= 2 ? 'eslint error' : 'eslint warning');
+    const messageId = asString(message.messageId, '');
     const hit = finding('eslint', file, line, rule || 'eslint', text);
+    const withId = messageId === '' ? hit : { ...hit, messageId };
     if (severity >= 2) {
-      errors.push(hit);
+      errors.push(withId);
     } else {
-      warnings.push(hit);
+      warnings.push(withId);
     }
   });
   return ok({ errors, warnings });

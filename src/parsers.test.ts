@@ -36,6 +36,7 @@ describe('parseEslintOutput', () => {
       expect(parsed.value.errors).toHaveLength(1);
       expect(parsed.value.errors[0]?.rule).toBe('no-unused-vars');
       expect(parsed.value.errors[0]?.line).toBe(4);
+      expect(parsed.value.errors[0]?.messageId).toBeUndefined();
       expect(parsed.value.warnings).toHaveLength(1);
       expect(parsed.value.warnings[0]?.rule).toBe('no-console');
     }
@@ -81,6 +82,32 @@ describe('parseEslintOutput', () => {
 
   it('rejects a JSON object that is not an eslint array', () => {
     expect(parseEslintOutput('{"filePath":"a.ts"}').ok).toBe(false);
+  });
+
+  it('keeps messageId when ESLint JSON includes one', () => {
+    const parsed = parseEslintOutput(
+      JSON.stringify([
+        {
+          filePath: 'a.ts',
+          messages: [
+            {
+              line: 1,
+              ruleId: 'no-shadow',
+              messageId: 'noShadow',
+              message: "'x' is already declared in the upper scope on line 4 column 10.",
+              severity: 2,
+            },
+          ],
+        },
+      ]),
+    );
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.value.errors[0]?.messageId).toBe('noShadow');
+      expect(parsed.value.errors[0]?.message).toBe(
+        "'x' is already declared in the upper scope on line 4 column 10.",
+      );
+    }
   });
 });
 

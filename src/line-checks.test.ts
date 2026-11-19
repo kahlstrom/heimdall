@@ -5,6 +5,16 @@ import { describe, expect, it } from 'vitest';
 import { commentTextOfLine, runLineChecks, scanAddedSource } from './line-checks.js';
 import type { DiffScope } from './types.js';
 
+function addedFileScope(file: string): DiffScope {
+  return {
+    baseRef: 'main',
+    mergeBaseSha: 'a',
+    changedFiles: new Set([file]),
+    addedLines: new Map([[file, new Set([1])]]),
+    renamedFrom: new Map(),
+  };
+}
+
 describe('scanAddedSource', () => {
   it('flags a type assertion on an added line', () => {
     const hits = scanAddedSource('src/a.ts', 'const value = input as number;\n', new Set([1]));
@@ -101,12 +111,7 @@ describe('runLineChecks', () => {
     try {
       fs.mkdirSync(path.join(dir, 'src'));
       fs.writeFileSync(path.join(dir, 'src/a.ts'), 'export const n = (x: unknown) => x as number;\n');
-      const scope: DiffScope = {
-        baseRef: 'main',
-        mergeBaseSha: 'a',
-        changedFiles: new Set(['src/a.ts']),
-        addedLines: new Map([['src/a.ts', new Set([1])]]),
-      };
+      const scope = addedFileScope('src/a.ts');
       const hits = runLineChecks(dir, scope);
       expect(hits.ok).toBe(true);
       if (hits.ok) {
@@ -183,23 +188,13 @@ describe('no-silencing', () => {
       fs.mkdirSync(path.join(dir, 'src/generated'), { recursive: true });
       fs.writeFileSync(path.join(dir, 'src/a.mts'), 'void unused;\n');
       fs.writeFileSync(path.join(dir, 'src/generated/a.ts'), 'void unused;\n');
-      const mtsScope: DiffScope = {
-        baseRef: 'main',
-        mergeBaseSha: 'a',
-        changedFiles: new Set(['src/a.mts']),
-        addedLines: new Map([['src/a.mts', new Set([1])]]),
-      };
+      const mtsScope = addedFileScope('src/a.mts');
       const mtsHits = runLineChecks(dir, mtsScope, { extras: false });
       expect(mtsHits.ok).toBe(true);
       if (mtsHits.ok) {
         expect(mtsHits.value).toEqual([]);
       }
-      const genScope: DiffScope = {
-        baseRef: 'main',
-        mergeBaseSha: 'a',
-        changedFiles: new Set(['src/generated/a.ts']),
-        addedLines: new Map([['src/generated/a.ts', new Set([1])]]),
-      };
+      const genScope = addedFileScope('src/generated/a.ts');
       const skipped = runLineChecks(dir, genScope, {
         extras: false,
         allowSilencing: ['src/generated/**'],
@@ -304,12 +299,7 @@ describe('docs are not scanned as source', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-lines-md-'));
     try {
       fs.writeFileSync(path.join(dir, 'README.md'), '* never add eslint-disable\n');
-      const scope: DiffScope = {
-        baseRef: 'main',
-        mergeBaseSha: 'a',
-        changedFiles: new Set(['README.md']),
-        addedLines: new Map([['README.md', new Set([1])]]),
-      };
+      const scope = addedFileScope('README.md');
       const hits = runLineChecks(dir, scope);
       expect(hits.ok).toBe(true);
       if (hits.ok) {

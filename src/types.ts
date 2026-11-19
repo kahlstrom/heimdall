@@ -54,6 +54,8 @@ export type Finding = {
   readonly step: FindingStepName;
   /** Inclusive end of a range finding (jscpd clones). */
   readonly endLine?: number;
+  /** ESLint `messageId` when the JSON includes one. Used only for matching. */
+  readonly messageId?: string;
 };
 
 export type CommandStepConfig = {
@@ -101,6 +103,8 @@ export type DiffScope = {
   readonly mergeBaseSha: string;
   readonly changedFiles: ReadonlySet<string>;
   readonly addedLines: ReadonlyMap<string, ReadonlySet<number>>;
+  /** New repo-relative path → old path for git renames (`diff -M`). Copies are omitted. */
+  readonly renamedFrom: ReadonlyMap<string, string>;
 };
 
 export function addedLineCount(scope: DiffScope): number {

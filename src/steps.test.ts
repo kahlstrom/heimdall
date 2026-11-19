@@ -16,6 +16,8 @@ import {
   typecheckStep,
   type StepContext,
 } from './steps.js';
+import { loadDiffScope } from './diff.js';
+import { resolveBaseRef } from './git.js';
 import { formatFinding } from './report.js';
 import { err, ok, type DiffScope, type Finding, type GateConfig, type Result } from './types.js';
 import { commandResult as result, parseTestConfig as cfg } from '../test/helpers/gate-test.js';
@@ -37,6 +39,7 @@ const emptyScope: DiffScope = {
   mergeBaseSha: 'a',
   changedFiles: new Set(['src/a.ts']),
   addedLines: new Map([['src/a.ts', new Set([1])]]),
+  renamedFrom: new Map(),
 };
 
 function ctx(overrides: Partial<StepContext> & { config: GateConfig; runCommand: StepContext['runCommand'] }): StepContext {
@@ -354,6 +357,7 @@ describe('eslintStep', () => {
               mergeBaseSha,
               changedFiles: new Set(['src/used.js']),
               addedLines: new Map([['src/used.js', new Set([2])]]),
+              renamedFrom: new Map(),
             },
             config: cfg({
               steps: { eslint: { command: `${JSON.stringify(ESLINT_BIN)} . -f json` } },
@@ -531,6 +535,148 @@ describe('eslintStep', () => {
       }
     });
   });
+
+  it('passes a pre-existing error after a plain git mv', async () => {
+    await withTempRepo(async (repo) => {
+      writeRepoFile(repo, 'src/old.ts', 'export const old = 1;\n');
+      commitAll(repo, 'base');
+      git(repo, ['checkout', '-q', '-b', 'feat']);
+      git(repo, ['mv', 'src/old.ts', 'src/new.ts']);
+      commitAll(repo, 'rename');
+      const resolved = resolveBaseRef(repo, 'main');
+      expect(resolved.ok).toBe(true);
+      if (!resolved.ok) {
+        throw new Error(resolved.error);
+      }
+      const loaded = loadDiffScope(repo, resolved.value);
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) {
+        throw new Error(loaded.error);
+      }
+      expect(loaded.value.renamedFrom.get('src/new.ts')).toBe('src/old.ts');
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-eslint-rename-'));
+      const current = JSON.stringify([
+        {
+          filePath: path.join(repo, 'src/new.ts'),
+          messages: [{ line: 1, ruleId: 'eqeqeq', message: 'use ===', severity: 2 }],
+        },
+      ]);
+      const base = JSON.stringify([
+        {
+          filePath: path.join(repo, 'src/old.ts'),
+          messages: [{ line: 1, ruleId: 'eqeqeq', message: 'use ===', severity: 2 }],
+        },
+      ]);
+      let calls = 0;
+      const twoShot = eslintTwoShot(current, base);
+      try {
+        const step = await eslintStep.run(
+          ctx({
+            cwd: repo,
+            tmpDir,
+            scope: loaded.value,
+            config: cfg({ steps: { eslint: { command: 'npx eslint -f json' } } }),
+            runCommand: async (...args: Parameters<StepContext['runCommand']>) => {
+              calls += 1;
+              return twoShot(...args);
+            },
+          }),
+        );
+        expect(step.kind).toBe('pass');
+        expect(calls).toBe(2);
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it('passes a no-shadow finding whose line numbers drifted', async () => {
+    await withEslintRepo(async ({ repo, tmpDir, scope }) => {
+      const file = path.join(repo, 'src/old.ts');
+      const current = JSON.stringify([
+        {
+          filePath: file,
+          messages: [
+            {
+              line: 8,
+              ruleId: 'no-shadow',
+              messageId: 'noShadow',
+              message: "'x' is already declared in the upper scope on line 8 column 2.",
+              severity: 2,
+            },
+          ],
+        },
+      ]);
+      const base = JSON.stringify([
+        {
+          filePath: file,
+          messages: [
+            {
+              line: 4,
+              ruleId: 'no-shadow',
+              messageId: 'noShadow',
+              message: "'x' is already declared in the upper scope on line 4 column 10.",
+              severity: 2,
+            },
+          ],
+        },
+      ]);
+      const step = await eslintStep.run(
+        ctx({
+          cwd: repo,
+          tmpDir,
+          scope,
+          config: cfg({ steps: { eslint: { command: 'npx eslint -f json' } } }),
+          runCommand: eslintTwoShot(current, base),
+        }),
+      );
+      expect(step.kind).toBe('pass');
+    });
+  });
+
+  it('passes a complexity finding whose measured value dropped but stayed over the limit', async () => {
+    await withEslintRepo(async ({ repo, tmpDir, scope }) => {
+      const file = path.join(repo, 'src/old.ts');
+      const current = JSON.stringify([
+        {
+          filePath: file,
+          messages: [
+            {
+              line: 1,
+              ruleId: 'complexity',
+              messageId: 'complex',
+              message: 'Function has a complexity of 13. Maximum allowed is 10.',
+              severity: 2,
+            },
+          ],
+        },
+      ]);
+      const base = JSON.stringify([
+        {
+          filePath: file,
+          messages: [
+            {
+              line: 1,
+              ruleId: 'complexity',
+              messageId: 'complex',
+              message: 'Function has a complexity of 15. Maximum allowed is 10.',
+              severity: 2,
+            },
+          ],
+        },
+      ]);
+      const step = await eslintStep.run(
+        ctx({
+          cwd: repo,
+          tmpDir,
+          scope,
+          config: cfg({ steps: { eslint: { command: 'npx eslint -f json' } } }),
+          runCommand: eslintTwoShot(current, base),
+        }),
+      );
+      expect(step.kind).toBe('pass');
+    });
+  });
 });
 
 function eslintTwoShot(current: string, base: string, exitCode = 1): StepContext['runCommand'] {
@@ -561,6 +707,7 @@ async function withEslintRepo(
         mergeBaseSha,
         changedFiles: new Set(['src/a.ts']),
         addedLines: new Map([['src/a.ts', new Set([3])]]),
+        renamedFrom: new Map(),
       };
       await fn({ repo, tmpDir, mergeBaseSha, scope });
     } finally {
@@ -1189,6 +1336,7 @@ async function withKnipRepo(
         mergeBaseSha,
         changedFiles: new Set(['src/index.ts']),
         addedLines: new Map([['src/index.ts', new Set([1, 2])]]),
+        renamedFrom: new Map(),
       };
       await fn({ repo, tmpDir, mergeBaseSha, scope });
     } finally {
@@ -1535,6 +1683,49 @@ describe('knipStep', () => {
       }
     });
   });
+
+  it('passes a pre-existing unused export after a plain git mv', async () => {
+    await withTempRepo(async (repo) => {
+      writeRepoFile(repo, 'src/old.ts', 'export const leftover = 1;\n');
+      commitAll(repo, 'base');
+      git(repo, ['checkout', '-q', '-b', 'feat']);
+      git(repo, ['mv', 'src/old.ts', 'src/new.ts']);
+      commitAll(repo, 'rename');
+      const resolved = resolveBaseRef(repo, 'main');
+      expect(resolved.ok).toBe(true);
+      if (!resolved.ok) {
+        throw new Error(resolved.error);
+      }
+      const loaded = loadDiffScope(repo, resolved.value);
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) {
+        throw new Error(loaded.error);
+      }
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-knip-rename-'));
+      const current = knipReport({
+        files: [],
+        issues: [{ file: 'src/new.ts', exports: [{ name: 'leftover', line: 1 }] }],
+      });
+      const base = knipReport({
+        files: [],
+        issues: [{ file: 'src/old.ts', exports: [{ name: 'leftover', line: 1 }] }],
+      });
+      try {
+        const step = await knipStep.run(
+          ctx({
+            cwd: repo,
+            tmpDir,
+            scope: loaded.value,
+            config: cfg({ steps: { knip: { command: 'npx knip --reporter json' } } }),
+            runCommand: knipTwoShot(current, base),
+          }),
+        );
+        expect(step.kind).toBe('pass');
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+  });
 });
 
 const ARCHITECTURE_COMMAND = 'depcruise src --output-type json';
@@ -1583,6 +1774,7 @@ async function withArchitectureRepo(
         mergeBaseSha,
         changedFiles: new Set(['src/b.ts']),
         addedLines: new Map([['src/b.ts', new Set([1, 2])]]),
+        renamedFrom: new Map(),
       };
       await fn({ repo, tmpDir, mergeBaseSha, scope });
     } finally {
@@ -1774,6 +1966,47 @@ describe('architectureStep', () => {
         expect(step.reason).toMatch(
           /architecture: command not found \(exit 127\); install the tool or fix steps\.architecture\.command/,
         );
+      }
+    });
+  });
+
+  it('passes a pre-existing error-severity violation after a plain git mv', async () => {
+    await withTempRepo(async (repo) => {
+      writeRepoFile(repo, 'src/old.ts', 'export const old = 1;\n');
+      commitAll(repo, 'base');
+      git(repo, ['checkout', '-q', '-b', 'feat']);
+      git(repo, ['mv', 'src/old.ts', 'src/new.ts']);
+      commitAll(repo, 'rename');
+      const resolved = resolveBaseRef(repo, 'main');
+      expect(resolved.ok).toBe(true);
+      if (!resolved.ok) {
+        throw new Error(resolved.error);
+      }
+      const loaded = loadDiffScope(repo, resolved.value);
+      expect(loaded.ok).toBe(true);
+      if (!loaded.ok) {
+        throw new Error(loaded.error);
+      }
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-architecture-rename-'));
+      const current = architectureReport([
+        architectureViolation('src/new.ts', 'src/forbidden.ts', 'not-to-unallowed', 'error'),
+      ]);
+      const base = architectureReport([
+        architectureViolation('src/old.ts', 'src/forbidden.ts', 'not-to-unallowed', 'error'),
+      ]);
+      try {
+        const step = await architectureStep.run(
+          ctx({
+            cwd: repo,
+            tmpDir,
+            scope: loaded.value,
+            config: cfg({ steps: { architecture: { command: ARCHITECTURE_COMMAND } } }),
+            runCommand: architectureTwoShot(current, base),
+          }),
+        );
+        expect(step.kind).toBe('pass');
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
       }
     });
   });
@@ -2129,6 +2362,7 @@ describe('lineChecksStep', () => {
         mergeBaseSha: 'a',
         changedFiles: new Set(['src/a.ts']),
         addedLines: new Map([['src/a.ts', new Set([1])]]),
+        renamedFrom: new Map(),
       };
       const secretsOn = await lineChecksStep.run(
         ctx({
@@ -2181,6 +2415,7 @@ describe('lineChecksStep', () => {
             mergeBaseSha: 'a',
             changedFiles: new Set(['src/missing.ts']),
             addedLines: new Map([['src/missing.ts', new Set([1])]]),
+            renamedFrom: new Map(),
           },
           runCommand: async () => result({ exitCode: 0 }),
         }),

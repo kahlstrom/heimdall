@@ -233,7 +233,7 @@ its index.
 | --- | --- |
 | `tests` | Always runs in full. Prefer a JSON reporter (`vitest --reporter=json`, `jest --json`) so failures are not scraped from text. |
 | `typecheck` | Full typecheck (`tsc --noEmit` or equivalent). |
-| `eslint` | Prefer `-f json` so findings can be scoped. Extra key: `maxWarnings`. A finding counts if it is on an added line, or if it is new versus the merge-base anywhere. The baseline run happens only when the branch has findings off added lines; a baseline failure is a GATE ERROR. |
+| `eslint` | Prefer `-f json` so findings can be scoped. Extra key: `maxWarnings`. A finding counts if it is on an added line, or if it is new versus the merge-base anywhere. Matching uses rule, optional `messageId`, and the message with digit runs normalized (identifier names stay distinct). A renamed file matches the merge-base under the old path. The baseline run happens only when the branch has findings off added lines; a baseline failure is a GATE ERROR. |
 | `knip` | Prefer `--reporter json`. |
 | `jscpd` | Must print JSON on stdout. `$HEIMDALL_TMP` is a per-run temp dir. |
 | `secrets` | Prefer secretlint 14.x `--format json`. No default command. Findings are scoped to added lines; the report prints rule id and `file:line` only, never the matched secret. |
@@ -283,9 +283,14 @@ old dead code in untouched areas is not). If the merge-base knip or
 architecture result cannot be computed, that is a GATE ERROR, not a pass.
 New-versus-base matching for knip, architecture, and eslint uses **file, rule,
 and message** (not line) and counts duplicates: a second identical finding is
-new if the merge-base only has one. Tests and typecheck run in full.
-`line-checks` only looks at added lines. An empty diff against the resolved
-base prints a **WARNING** in the summary naming that base.
+new if the merge-base only has one. A git rename (`diff -M`) matches the
+finding in the new path against the merge-base under the old path, including
+paths inside architecture messages. ESLint messages drop standalone digit runs
+so `no-shadow` line/column text and `complexity` / `max-*` measured values do
+not look new; identifier names such as `foo2` stay distinct. Tests and
+typecheck run in full. `line-checks` only looks at added lines. An empty
+diff against the resolved base prints a **WARNING** in the summary naming
+that base.
 
 ## Built-in checks
 

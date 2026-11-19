@@ -4,7 +4,14 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { classifyCommandFailure, combinedOutput, type RunCommandFn } from './command.js';
-import { filterFindingsToScope, findingsNotInBase, partitionFindingsByScope, toRepoPath } from './diff.js';
+import {
+  filterFindingsToScope,
+  findingsNotInBase,
+  matchFindingKey,
+  partitionFindingsByScope,
+  relativizeFindingFiles,
+  stableEslintMessage,
+} from './diff.js';
 import { materializeCommit } from './git.js';
 import { classifyFailedTests, parseTestRun } from './flakes.js';
 import { extractJson } from './json.js';
@@ -298,19 +305,15 @@ export const testsStep: GateStep = {
   },
 };
 
-/**
- * Repo-relative file key so a merge-base copy's absolute ESLint paths match
- * the live checkout. Tries each root because mocked baseline output may still
- * use live-checkout paths.
- */
-function repoFileKey(finding: Finding, roots: readonly string[]): string {
-  for (const root of roots) {
-    const rel = toRepoPath(finding.file, root);
-    if (rel !== undefined) {
-      return rel;
-    }
-  }
-  return finding.file;
+function relativizeEslintParsed(parsed: EslintParsed, baseRoot: string): EslintParsed {
+  return {
+    errors: relativizeFindingFiles(parsed.errors, baseRoot),
+    warnings: relativizeFindingFiles(parsed.warnings, baseRoot),
+  };
+}
+
+function eslintMatchKey(ctx: StepContext): (finding: Finding) => string {
+  return (finding) => matchFindingKey(finding, ctx.scope, ctx.cwd, stableEslintMessage);
 }
 
 /**
@@ -342,15 +345,14 @@ async function inScopeOrNewVersusBase(
     return { errors: [...errors.value.inScope], warnings: [...warningIn] };
   }
 
-  const dest = path.join(ctx.tmpDir, 'eslint-base');
-  const base = await findingsAtMergeBase(ctx, 'eslint', command, parseEslintOutput);
+  const base = await findingsAtMergeBase(ctx, 'eslint', command, parseEslintOutput, relativizeEslintParsed);
   if (isStepResult(base)) {
     return base;
   }
-  const fileOf = (finding: Finding): string => repoFileKey(finding, [ctx.cwd, dest]);
+  const keyOf = eslintMatchKey(ctx);
   return {
-    errors: [...errors.value.inScope, ...findingsNotInBase(errors.value.outOfScope, base.errors, fileOf)],
-    warnings: [...warningIn, ...findingsNotInBase(warningOut, base.warnings, fileOf)],
+    errors: [...errors.value.inScope, ...findingsNotInBase(errors.value.outOfScope, base.errors, keyOf)],
+    warnings: [...warningIn, ...findingsNotInBase(warningOut, base.warnings, keyOf)],
   };
 }
 
@@ -420,11 +422,12 @@ function newVsBaseCommandStep(
         return toolFailedWithoutFindings(name, ran.command, ran.result);
       }
 
-      const baseFindings = await findingsAtMergeBase(ctx, name, ran.command, parse);
+      const baseFindings = await findingsAtMergeBase(ctx, name, ran.command, parse, relativizeFindingFiles);
       if (isStepResult(baseFindings)) {
         return baseFindings;
       }
-      const findings = findingsNotInBase(ran.findings, baseFindings);
+      const keyOf = (finding: Finding): string => matchFindingKey(finding, ctx.scope, ctx.cwd);
+      const findings = findingsNotInBase(ran.findings, baseFindings, keyOf);
       if (findings.length === 0) {
         return { kind: 'pass', name };
       }
@@ -442,13 +445,16 @@ export const knipStep: GateStep = newVsBaseCommandStep('knip', parseKnipOutput);
  *
  * Step-agnostic on purpose: knip, architecture, and eslint pass their name
  * and parser. Pair with findingsNotInBase to keep only findings that are new
- * versus base.
+ * versus base. `mapParsed` runs while the copy still exists so absolute tool
+ * paths can be rewritten against that single `baseRoot`; the copy is then
+ * deleted and callers must not look it up again.
  */
 export async function findingsAtMergeBase<T>(
   ctx: StepContext,
   stepName: CommandStepName,
   command: string,
   parse: (output: string) => Result<T>,
+  mapParsed: (value: T, baseRoot: string) => T = (value) => value,
 ): Promise<T | StepResult> {
   const dest = path.join(ctx.tmpDir, `${stepName}-base`);
   try {
@@ -480,7 +486,7 @@ export async function findingsAtMergeBase<T>(
       }
       return parsed;
     }
-    return parsed;
+    return mapParsed(parsed, dest);
   } finally {
     fs.rmSync(dest, { recursive: true, force: true });
   }

@@ -8,7 +8,9 @@ import {
   filterFindingsToScope,
   findingsNotInBase,
   loadDiffScope,
+  matchFindingKey,
   parseChangedNewLines,
+  stableEslintMessage,
   toRepoPath,
 } from './diff.js';
 import { resolveBaseRef } from './git.js';
@@ -105,6 +107,7 @@ describe('filterFindingsToScope', () => {
     mergeBaseSha: 'aaa',
     changedFiles: new Set(['src/new.ts']),
     addedLines: new Map([['src/new.ts', new Set([4, 5])]]),
+    renamedFrom: new Map(),
   };
 
   function hit(file: string, line: number, endLine?: number): Finding {
@@ -214,6 +217,123 @@ describe('findingsNotInBase', () => {
     const base = [hit('src/a.ts', 'no-unused-vars', 'x', 1), hit('src/a.ts', 'no-unused-vars', 'x', 2)];
     expect(findingsNotInBase(current, base)).toEqual([]);
   });
+
+  const renamedScope: DiffScope = {
+    baseRef: 'main',
+    mergeBaseSha: 'aaa',
+    changedFiles: new Set(['src/old.ts', 'src/new.ts']),
+    addedLines: new Map([['src/new.ts', new Set()]]),
+    renamedFrom: new Map([['src/new.ts', 'src/old.ts']]),
+  };
+
+  it('matches a finding in a renamed file under the old path', () => {
+    const current = [hit('src/new.ts', 'exports', 'helper', 1)];
+    const base = [hit('src/old.ts', 'exports', 'helper', 1)];
+    const keyOf = (finding: Finding): string => matchFindingKey(finding, renamedScope, SCOPE_ROOT);
+    expect(findingsNotInBase(current, base, keyOf)).toEqual([]);
+  });
+
+  it('rewrites renamed paths inside architecture messages', () => {
+    const current: Finding[] = [
+      {
+        step: 'architecture',
+        file: 'src/new.ts',
+        line: 0,
+        rule: 'not-to-unallowed',
+        message: 'src/new.ts -> src/forbidden.ts',
+      },
+    ];
+    const base: Finding[] = [
+      {
+        step: 'architecture',
+        file: 'src/old.ts',
+        line: 0,
+        rule: 'not-to-unallowed',
+        message: 'src/old.ts -> src/forbidden.ts',
+      },
+    ];
+    const keyOf = (finding: Finding): string => matchFindingKey(finding, renamedScope, SCOPE_ROOT);
+    expect(findingsNotInBase(current, base, keyOf)).toEqual([]);
+  });
+});
+
+describe('stableEslintMessage', () => {
+  const scope: DiffScope = {
+    baseRef: 'main',
+    mergeBaseSha: 'aaa',
+    changedFiles: new Set(['src/a.ts']),
+    addedLines: new Map([['src/a.ts', new Set([1])]]),
+    renamedFrom: new Map(),
+  };
+  const keyOf = (finding: Finding): string => matchFindingKey(finding, scope, SCOPE_ROOT, stableEslintMessage);
+  const eslintHit = (
+    message: string,
+    extras: { line?: number; messageId?: string; file?: string } = {},
+  ): Finding => {
+    const finding: Finding = {
+      step: 'eslint',
+      file: extras.file ?? 'src/a.ts',
+      line: extras.line ?? 1,
+      rule: 'x',
+      message,
+    };
+    if (extras.messageId === undefined) {
+      return finding;
+    }
+    return { ...finding, messageId: extras.messageId };
+  };
+
+  it('normalizes line and column numbers without touching identifier names', () => {
+    expect(stableEslintMessage("'x' is already declared in the upper scope on line 4 column 10.")).toBe(
+      "'x' is already declared in the upper scope on line # column #.",
+    );
+    expect(stableEslintMessage("'foo2' is defined but never used.")).toBe("'foo2' is defined but never used.");
+  });
+
+  it('normalizes measured complexity and max-* values', () => {
+    expect(stableEslintMessage('Function has a complexity of 15. Maximum allowed is 10.')).toBe(
+      'Function has a complexity of #. Maximum allowed is #.',
+    );
+  });
+
+  it('treats a no-shadow finding as the same after line numbers drift', () => {
+    const current = [
+      eslintHit("'x' is already declared in the upper scope on line 8 column 2.", {
+        line: 12,
+        messageId: 'noShadow',
+      }),
+    ];
+    const base = [
+      eslintHit("'x' is already declared in the upper scope on line 4 column 10.", {
+        line: 8,
+        messageId: 'noShadow',
+      }),
+    ];
+    expect(findingsNotInBase(current, base, keyOf)).toEqual([]);
+  });
+
+  it('treats a complexity finding as the same when the measured value drops but stays over the limit', () => {
+    const current = [eslintHit('Function has a complexity of 13. Maximum allowed is 10.', { messageId: 'complex' })];
+    const base = [eslintHit('Function has a complexity of 15. Maximum allowed is 10.', { messageId: 'complex' })];
+    expect(findingsNotInBase(current, base, keyOf)).toEqual([]);
+  });
+
+  it('keeps unused identifiers that differ only by digits distinct', () => {
+    const current = [eslintHit("'foo3' is defined but never used.", { messageId: 'unusedVar' })];
+    const base = [eslintHit("'foo2' is defined but never used.", { messageId: 'unusedVar' })];
+    expect(findingsNotInBase(current, base, keyOf)).toEqual(current);
+  });
+
+  it('still counts a second identical eslint finding as new', () => {
+    const current = [
+      eslintHit("'x' is already declared in the upper scope on line 8 column 2.", { line: 8, messageId: 'noShadow' }),
+      eslintHit("'x' is already declared in the upper scope on line 20 column 1.", { line: 20, messageId: 'noShadow' }),
+    ];
+    const base = [
+      eslintHit("'x' is already declared in the upper scope on line 4 column 10.", { line: 4, messageId: 'noShadow' }),
+    ];
+    expect(findingsNotInBase(current, base, keyOf)).toEqual([current[1]]);
+  });
 });
 
 describe('toRepoPath', () => {
@@ -261,6 +381,7 @@ describe('configFileInDiff', () => {
     mergeBaseSha: 'aaa',
     changedFiles: new Set(['heimdall.config.json', 'src/new.ts']),
     addedLines: new Map(),
+    renamedFrom: new Map(),
   };
 
   it('returns the repo-relative config path when the story changed it', () => {
@@ -362,6 +483,7 @@ describe('loadDiffScope', () => {
       const scope = mustLoadScope(repo);
       expect(scope.changedFiles.has('src/new name.ts')).toBe(true);
       expect(scope.changedFiles.has('src/old name.ts')).toBe(true);
+      expect(scope.renamedFrom.get('src/new name.ts')).toBe('src/old name.ts');
       expect(scope.addedLines.get('src/new name.ts')?.size).toBe(0);
       const filtered = filterFindingsToScope(
         [{ step: 'eslint', file: path.join(repo, 'src/new name.ts'), line: 1, rule: 'x', message: 'legacy' }],
