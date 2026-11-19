@@ -420,9 +420,10 @@ parsed). A runner crash with no parseable output is a **GATE ERROR**.
   members, and duplicates.
 - **secrets:** secretlint `--format json` (14.x), an ESLint-like
   `{ filePath, messages: [{ ruleId, loc.start.line }] }[]`. Each finding prints
-  as `file:line [rule]` with no message text. Unparseable output or a non-zero
-  exit with no findings is a GATE ERROR that names the parser reason and the
-  exit code — never tool stdout or stderr, which may hold a secret.
+  as `file:line [rule]` with no message text. Unparseable output is a GATE
+  ERROR that names the parser reason and the exit code. A non-zero exit with
+  no findings is a GATE ERROR that names the command and the exit code.
+  Neither includes tool stdout or stderr, which may hold a secret.
 - **architecture:** dependency-cruiser `--output-type json` (18.x)
   `{ "summary": { "violations": [{ "from", "to", "rule": { "name", "severity" }, "cycle"? }] } }`.
   Only `severity: "error"` counts. Each finding is `[rule] from -> to`, or the
