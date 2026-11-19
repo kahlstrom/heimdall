@@ -113,8 +113,9 @@ After `npm link`, `heimdall` is on your PATH. To unlink later:
 1. Copy [`configs/example/heimdall.config.json`](./configs/example/heimdall.config.json)
    to one of:
    - `<git root>/heimdall.config.json` (in the repo you are checking), or
-   - `$HEIMDALL_HOME/<repo-folder>/heimdall.config.json` (default `$HEIMDALL_HOME`
-     is this CLI's `configs/` folder), or
+   - `$HEIMDALL_HOME/<name>/heimdall.config.json` (default `$HEIMDALL_HOME`
+     is this CLI's `configs/` folder; `<name>` is the git common-dir repo
+     name, so a worktree uses the main checkout's config), or
    - a folder in a **private** git repo, with `HEIMDALL_HOME` pointing at that
      clone (recommended so the config lock works; see
      [`configs/README.md`](./configs/README.md)).
@@ -142,8 +143,19 @@ With no `--config`:
 
 `$HEIMDALL_HOME` defaults to this CLI's `configs/` folder, resolved from the
 install location (`dist/` or `src/`), not from cwd. `$GATE_HOME` is still
-honoured as a deprecated alias. `<name>` is the git root's folder name, tried
-as-is and then lowercased (`~/Projects/MyApp` finds `$HEIMDALL_HOME/myapp`).
+honoured as a deprecated alias. `<name>` is one repo name from the git
+common directory (`git rev-parse --path-format=absolute --git-common-dir`),
+tried as-is and then lowercased (`~/Projects/MyApp` finds
+`$HEIMDALL_HOME/myapp`):
+
+- basename `.git` → parent folder name (normal checkout or linked worktree)
+- basename ends in `.git` → that suffix is dropped (bare repo)
+- anything else (submodule `.git/modules/<x>`, custom `GIT_DIR`) → the
+  work-tree folder name (`--show-toplevel`)
+
+The work-tree folder basename is not a separate lookup candidate, so
+`heimdall` inside a worktree of `foo` at `foo-feat-s03` still loads
+`$HEIMDALL_HOME/foo/`.
 
 `--config` is exclusive: only that path is used. A missing, invalid, or
 unknown-key config is a **GATE ERROR**, not red. The summary prints which
@@ -477,8 +489,10 @@ typechecks `src`, `test`, and `vitest.config.ts` via `tsconfig.json`. Tests
 use temp git repos under the system temp directory and delete them afterwards.
 Tests set `$HEIMDALL_HOME` to a temp directory and never touch the real
 `~/.heimdall` or `~/.gate`. Outside-repo config lock tests use a temp git repo
-as `$HEIMDALL_HOME`. No git worktrees. The default `$HEIMDALL_HOME` (this
-repo's `configs/`) is asserted only as a listed lookup path.
+as `$HEIMDALL_HOME`. Config-lookup tests create linked worktrees, bare-repo
+worktrees, and submodules under the system temp directory and delete them
+afterwards. The default `$HEIMDALL_HOME` (this repo's `configs/`) is asserted
+only as a listed lookup path.
 
 This repo pins `eslint`, `knip`, `jscpd`, `vitest`, and `typescript` to exact
 versions. Licensed under MIT.

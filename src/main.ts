@@ -12,10 +12,11 @@ Run Heimdall, the shared quality gate, from inside a target git repo.
   --config <path>   path to heimdall.config.json
                     default: <git-root>/heimdall.config.json, then
                     <git-root>/gate.config.json (deprecated), then
-                    $HEIMDALL_HOME/<repo-folder>/heimdall.config.json, then
-                    ~/.heimdall/<repo-folder>/, then ~/.gate/<repo-folder>/
+                    $HEIMDALL_HOME/<name>/heimdall.config.json, then
+                    ~/.heimdall/<name>/, then ~/.gate/<name>/
                     ($HEIMDALL_HOME defaults to this CLI's configs/ folder;
-                    folder name is tried as-is then lowercased;
+                    <name> is from the git common dir so a worktree uses
+                    the main repo's name; tried as-is then lowercased;
                     GATE_HOME is a deprecated alias)
   --cwd <path>      repo to check (default: current directory)
   --allow-wide      continue when the diff exceeds maxChangedFiles

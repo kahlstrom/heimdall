@@ -1,8 +1,8 @@
 # Per-repo Heimdall configs
 
-Heimdall looks up a config by the target repo's git-root folder name. Keep one
-folder per repo next to this file, named after that git root (tried as-is, then
-lowercased):
+Heimdall looks up a config by one repo name from the git common directory, so a
+linked worktree uses the same folder as the main checkout. Keep one folder per
+repo next to this file, named after that repo (tried as-is, then lowercased):
 
 ```text
 configs/

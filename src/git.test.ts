@@ -4,15 +4,17 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   enclosingGitRoot,
+  gitConfigLookupName,
   gitHeadSha,
   listUncommittedPaths,
   materializeCommit,
+  repoNameFromGitCommonDir,
   resolveBaseRef,
   runGit,
   splitNul,
 } from './git.js';
 import { withProcessEnv } from '../test/helpers/gate-test.js';
-import { commitAll, git, withTempRepo, writeRepoFile } from '../test/helpers/temp-repo.js';
+import { addWorktree, commitAll, git, withTempRepo, writeRepoFile } from '../test/helpers/temp-repo.js';
 
 async function withArchiveDest(fn: (dest: string) => Promise<void>): Promise<void> {
   const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-archive-'));
@@ -194,6 +196,89 @@ describe('resolveBaseRef', () => {
         expect(resolved.error).toMatch(/baseRef/);
       }
     });
+  });
+});
+
+describe('repoNameFromGitCommonDir', () => {
+  it('uses the parent of a .git common dir (normal checkout or worktree)', () => {
+    expect(repoNameFromGitCommonDir('/tmp/foo/.git', '/tmp/foo')).toBe('foo');
+    expect(repoNameFromGitCommonDir('/tmp/foo/.git', '/tmp/foo-feat-s03')).toBe('foo');
+  });
+
+  it('strips a trailing .git from a bare-repo common dir', () => {
+    expect(repoNameFromGitCommonDir('/tmp/foo.git', '/tmp/foo-feat-s03')).toBe('foo');
+  });
+
+  it('falls back to the toplevel folder for submodules and custom GIT_DIR', () => {
+    expect(repoNameFromGitCommonDir('/tmp/super/.git/modules/lib', '/tmp/super/vendor/lib')).toBe('lib');
+    expect(repoNameFromGitCommonDir('/tmp/custom-store', '/tmp/foo')).toBe('foo');
+  });
+});
+
+describe('gitConfigLookupName', () => {
+  it('matches the checkout folder for a normal repo', async () => {
+    await withTempRepo(async (repo) => {
+      writeRepoFile(repo, 'README.md', 'base\n');
+      commitAll(repo, 'initial');
+      expect(gitConfigLookupName(repo)).toEqual({ ok: true, value: 'foo' });
+    }, { folderName: 'foo' });
+  });
+
+  it('uses the main repo name from a linked worktree, not the worktree folder', async () => {
+    await withTempRepo(async (repo) => {
+      writeRepoFile(repo, 'README.md', 'base\n');
+      commitAll(repo, 'initial');
+      const worktree = addWorktree(repo, 'foo-feat-s03');
+      expect(gitConfigLookupName(worktree)).toEqual({ ok: true, value: 'foo' });
+      expect(path.basename(worktree)).toBe('foo-feat-s03');
+    }, { folderName: 'foo' });
+  });
+
+  it('strips .git from a bare-repo worktree common dir', async () => {
+    await withTempRepo(async (repo) => {
+      writeRepoFile(repo, 'README.md', 'base\n');
+      commitAll(repo, 'initial');
+      const parent = path.dirname(repo);
+      const bare = path.join(parent, 'foo.git');
+      git(parent, ['clone', '--bare', repo, bare]);
+      const worktree = path.join(parent, 'foo-feat-s03');
+      git(bare, ['worktree', 'add', worktree, 'main']);
+      expect(gitConfigLookupName(worktree)).toEqual({ ok: true, value: 'foo' });
+    }, { folderName: 'foo-src' });
+  });
+
+  it('falls back to the submodule work-tree folder, not the superproject name', async () => {
+    await withTempRepo(async (lib) => {
+      writeRepoFile(lib, 'src/lib.ts', 'export const n = 1;\n');
+      commitAll(lib, 'lib');
+      await withTempRepo(async (superRepo) => {
+        writeRepoFile(superRepo, 'README.md', 'super\n');
+        commitAll(superRepo, 'initial');
+        git(superRepo, ['-c', 'protocol.file.allow=always', 'submodule', 'add', lib, 'vendor/lib']);
+        commitAll(superRepo, 'add submodule');
+        const sub = path.join(superRepo, 'vendor/lib');
+        expect(gitConfigLookupName(sub)).toEqual({ ok: true, value: 'lib' });
+        expect(gitConfigLookupName(superRepo)).toEqual({ ok: true, value: 'super' });
+      }, { folderName: 'super' });
+    }, { folderName: 'lib' });
+  });
+
+  it('falls back to the toplevel folder for a custom GIT_DIR', async () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-gitdir-'));
+    try {
+      const repo = path.join(parent, 'foo');
+      const store = path.join(parent, 'custom-store');
+      fs.mkdirSync(repo, { recursive: true });
+      git(repo, ['init', '--separate-git-dir', store, '-b', 'main']);
+      git(repo, ['config', 'user.email', 'gate-test@example.com']);
+      git(repo, ['config', 'user.name', 'Gate Test']);
+      git(repo, ['config', 'commit.gpgsign', 'false']);
+      writeRepoFile(repo, 'README.md', 'base\n');
+      commitAll(repo, 'initial');
+      expect(gitConfigLookupName(repo)).toEqual({ ok: true, value: 'foo' });
+    } finally {
+      fs.rmSync(parent, { recursive: true, force: true });
+    }
   });
 });
 

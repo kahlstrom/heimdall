@@ -5,6 +5,7 @@
  */
 import { spawn, spawnSync, type ChildProcess, type SpawnSyncReturns } from 'node:child_process';
 import fs from 'node:fs';
+import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { terminateChild } from './command.js';
 import { DEFAULT_STEP_TIMEOUT_MS, err, errorMessage, ok, type Result } from './types.js';
@@ -110,6 +111,42 @@ export function gitRepoRoot(cwd: string): Result<string> {
     return err(`not a git repository (${cwd}): ${result.error}`);
   }
   return ok(result.value.trim());
+}
+
+const GIT_DIR_SUFFIX = '.git';
+
+/**
+ * One folder name for `$HEIMDALL_HOME/<name>` (and `~/.heimdall`, `~/.gate`).
+ * Taken from the git common dir so a linked worktree shares the main repo's
+ * config instead of using the worktree folder's basename.
+ */
+export function repoNameFromGitCommonDir(commonDir: string, toplevel: string): string {
+  const resolvedCommon = path.resolve(commonDir);
+  const base = path.basename(resolvedCommon);
+  if (base === GIT_DIR_SUFFIX) {
+    return path.basename(path.dirname(resolvedCommon));
+  }
+  if (base.endsWith(GIT_DIR_SUFFIX)) {
+    return base.slice(0, -GIT_DIR_SUFFIX.length);
+  }
+  return path.basename(path.resolve(toplevel));
+}
+
+/**
+ * Resolve the config-lookup repo name from `git rev-parse --git-common-dir`.
+ * Failures here are GATE ERRORs: without a common dir the home-config name
+ * cannot be chosen.
+ */
+export function gitConfigLookupName(gitRoot: string): Result<string> {
+  const result = runGit(['rev-parse', '--path-format=absolute', '--git-common-dir'], gitRoot);
+  if (!result.ok) {
+    return err(`cannot resolve git common dir (${gitRoot}): ${result.error}`);
+  }
+  const commonDir = result.value.trim();
+  if (commonDir === '') {
+    return err(`git rev-parse --git-common-dir returned an empty path in ${gitRoot}`);
+  }
+  return ok(repoNameFromGitCommonDir(path.resolve(gitRoot, commonDir), gitRoot));
 }
 
 /**

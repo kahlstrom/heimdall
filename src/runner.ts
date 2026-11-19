@@ -32,6 +32,7 @@ import { configFileInDiff, loadDiffScope, toRepoPath } from './diff.js';
 import { matchesAnyGlob } from './glob.js';
 import {
   enclosingGitRoot,
+  gitConfigLookupName,
   gitHeadSha,
   gitRepoRoot,
   hasConfiguredUpstream,
@@ -329,8 +330,12 @@ export async function runGate(options: RunGateOptions): Promise<GateOutcome> {
     return gateError(started.error, undefined);
   }
   const repoRoot = started.value;
+  const lookupName = gitConfigLookupName(repoRoot);
+  if (!lookupName.ok) {
+    return gateError(lookupName.error, undefined);
+  }
 
-  const lookedUp = resolveConfigPath(options.cwd, repoRoot, options.configPath, processEnv);
+  const lookedUp = resolveConfigPath(options.cwd, repoRoot, lookupName.value, options.configPath, processEnv);
   if (!lookedUp.ok) {
     return gateError(lookedUp.error, undefined);
   }

@@ -13,7 +13,7 @@ import {
   writeHomeGateConfig,
 } from '../test/helpers/gate-test.js';
 import { isProcessAlive, nodeCommand, waitForFile } from '../test/helpers/process.js';
-import { commitAll, git, withTempRepo, writeRepoFile } from '../test/helpers/temp-repo.js';
+import { addWorktree, commitAll, git, withTempRepo, writeRepoFile } from '../test/helpers/temp-repo.js';
 
 const PASSING_TESTS_CONFIG = { steps: { tests: { command: 'npm test' } } };
 
@@ -520,6 +520,45 @@ describe('runGate exit codes', () => {
         expect(outcome.kind).toBe('green');
         expectSameFile(outcome.configPath, configPath);
       }, null);
+    });
+  });
+
+  it('loads $HEIMDALL_HOME/<main-repo>/ from a linked worktree whose folder name differs', async () => {
+    await withTempGateHome(async (gateHome) => {
+      await withTempRepo(async (repo) => {
+        writeRepoFile(repo, 'src/a.ts', 'export const a = 1;\n');
+        commitAll(repo, 'base');
+        git(repo, ['checkout', '-q', '-b', 'feat-s03']);
+        writeRepoFile(repo, 'src/a.ts', 'export const a = 2;\n');
+        commitAll(repo, 'feat');
+        git(repo, ['checkout', '-q', 'main']);
+        const worktree = addWorktree(repo, 'foo-feat-s03', 'feat-s03');
+        writeHomeGateConfig(gateHome, 'foo-feat-s03', PASSING_TESTS_CONFIG);
+        const configPath = writeHomeGateConfig(gateHome, 'foo', PASSING_TESTS_CONFIG);
+        const outcome = await runGate({ cwd: worktree, ...mockPass() });
+        expect(outcome.kind).toBe('green');
+        expectSameFile(outcome.configPath, configPath);
+      }, { folderName: 'foo' });
+    });
+  });
+
+  it('lists the common-dir name, not the worktree folder, when no config is found', async () => {
+    await withTempGateHome(async (gateHome) => {
+      await withTempRepo(async (repo) => {
+        writeRepoFile(repo, 'src/a.ts', 'export const a = 1;\n');
+        commitAll(repo, 'base');
+        const worktree = addWorktree(repo, 'foo-feat-s03');
+        const outcome = await runGate({ cwd: worktree });
+        expect(outcome.kind).toBe('error');
+        expect(outcome.exitCode).toBe(2);
+        if (outcome.kind === 'error') {
+          expect(outcome.reason).toMatch(/no heimdall.config.json found/);
+          expect(outcome.reason).toContain(path.join(worktree, 'heimdall.config.json'));
+          expect(outcome.reason).toContain(path.join(gateHome, 'foo', 'heimdall.config.json'));
+          expect(outcome.reason).toContain(path.join(gateHome, 'foo', 'gate.config.json'));
+          expect(outcome.reason).not.toContain(path.join(gateHome, 'foo-feat-s03', 'heimdall.config.json'));
+        }
+      }, { folderName: 'foo' });
     });
   });
 

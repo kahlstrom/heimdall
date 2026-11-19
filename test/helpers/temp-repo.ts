@@ -1,6 +1,7 @@
 /**
  * Temp git repos for gate tests. Always cleaned up, even on failure.
- * These are plain directories — never git worktrees.
+ * Linked worktrees and submodules are created next to the main checkout
+ * so the helper's `finally` still deletes them with the temp parent.
  */
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -40,4 +41,18 @@ export async function withTempRepo(
   } finally {
     fs.rmSync(parent, { recursive: true, force: true });
   }
+}
+
+/**
+ * Add a linked worktree as a sibling of `repo`. `withTempRepo({ folderName })`
+ * must have been used so both folders share the temp parent.
+ */
+export function addWorktree(repo: string, folderName: string, ref?: string): string {
+  const dest = path.join(path.dirname(repo), folderName);
+  if (ref === undefined) {
+    git(repo, ['worktree', 'add', dest]);
+  } else {
+    git(repo, ['worktree', 'add', dest, ref]);
+  }
+  return dest;
 }

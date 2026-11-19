@@ -205,16 +205,18 @@ function addHomeIfDistinct(
  * Paths to try for a Heimdall config, in order. `--config` is exclusive: the git
  * root and `$HEIMDALL_HOME` are not consulted when it is given. After the in-repo
  * file (`heimdall.config.json`, then deprecated `gate.config.json`), home lookup
- * uses the git root's folder name as-is, then lowercased when that differs
- * (`~/Projects/MyApp` finds `$HEIMDALL_HOME/myapp`). `$HEIMDALL_HOME` defaults to this
- * package's `configs/` (from the CLI install location). `~/.heimdall/<name>/`
- * is then tried, then `~/.gate/<name>/` for compatibility. A config outside the
- * git root is not in the story diff, so the in-repo config-change guard ignores
+ * uses one repo name from the git common dir, then lowercased when that differs
+ * (`~/Projects/MyApp` finds `$HEIMDALL_HOME/myapp`). The work-tree folder basename
+ * is not a separate candidate. `$HEIMDALL_HOME` defaults to this package's
+ * `configs/` (from the CLI install location). `~/.heimdall/<name>/` is then
+ * tried, then `~/.gate/<name>/` for compatibility. A config outside the git
+ * root is not in the story diff, so the in-repo config-change guard ignores
  * it; uncommitted files in that config directory are a separate RED check.
  */
 function configLookupCandidates(
   cwd: string,
   gitRoot: string,
+  lookupName: string,
   explicitPath: string | undefined,
   env: NodeJS.ProcessEnv,
 ): readonly ConfigCandidate[] {
@@ -222,7 +224,6 @@ function configLookupCandidates(
     const filePath = path.resolve(cwd, explicitPath);
     return [{ path: filePath, exists: () => fs.existsSync(filePath) }];
   }
-  const name = path.basename(path.resolve(gitRoot));
   const home = resolveHeimdallHome(env);
   const heimdallHome = heimdallFallbackHome();
   const compatHome = compatibilityGateHome();
@@ -231,9 +232,9 @@ function configLookupCandidates(
     const filePath = path.join(gitRoot, fileName);
     pushCandidate(candidates, { path: filePath, exists: () => fs.existsSync(filePath) });
   }
-  addNamedHomeCandidates(candidates, home, name);
-  addHomeIfDistinct(candidates, heimdallHome, [home], name);
-  addHomeIfDistinct(candidates, compatHome, [home, heimdallHome], name);
+  addNamedHomeCandidates(candidates, home, lookupName);
+  addHomeIfDistinct(candidates, heimdallHome, [home], lookupName);
+  addHomeIfDistinct(candidates, compatHome, [home, heimdallHome], lookupName);
   return candidates;
 }
 
@@ -548,10 +549,11 @@ export function loadGateConfigFile(configPath: string): Result<GateConfig> {
 export function resolveConfigPath(
   cwd: string,
   gitRoot: string,
+  lookupName: string,
   explicitPath?: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Result<string> {
-  const candidates = configLookupCandidates(cwd, gitRoot, explicitPath, env);
+  const candidates = configLookupCandidates(cwd, gitRoot, lookupName, explicitPath, env);
   for (const candidate of candidates) {
     if (candidate.exists()) {
       return ok(candidate.path);

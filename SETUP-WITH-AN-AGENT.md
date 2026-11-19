@@ -134,10 +134,11 @@ Ask the user:
        heimdall.config.json
    ```
 
-   **Folder naming:** Heimdall finds a config by the project's **git root
-   folder name**, tried as-is, then lowercased. A repo at `~/Projects/MyApp`
-   matches `MyApp/` or `myapp/`. Name each folder after the repo's folder on
-   disk, not its GitHub name if they differ.
+   **Folder naming:** Heimdall finds a config by one **git common-dir repo
+   name**, tried as-is, then lowercased. A repo at `~/Projects/MyApp` matches
+   `MyApp/` or `myapp/`. A linked worktree at `MyApp-feat-s03` still uses
+   `MyApp/`. Name each folder after the main checkout (or bare repo, minus
+   `.git`), not the worktree folder and not the GitHub name if they differ.
 
 4. **Persist `HEIMDALL_HOME`.** Add it to the user's shell profile (ask
    first, and show the line you will add):
