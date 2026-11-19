@@ -213,6 +213,22 @@ describe('runGate exit codes', () => {
     }, { steps: { tests: { command: 'not-a-real-gate-tool' } } });
   });
 
+  it('returns GATE ERROR for a missing binary (exit 127) naming the step', async () => {
+    await seededRepo(async (repo) => {
+      const outcome = await runGate({
+        cwd: repo,
+        runCommand: async () => result({ exitCode: 127, stderr: 'command not found' }),
+      });
+      expect(outcome.kind).toBe('error');
+      expect(outcome.exitCode).toBe(2);
+      if (outcome.kind === 'error') {
+        expect(outcome.reason).toBe(
+          'tests: command not found (exit 127); install the tool or fix steps.tests.command',
+        );
+      }
+    }, { steps: { tests: { command: 'missing-vitest' } } });
+  });
+
   it('returns GATE ERROR for a crashed command', async () => {
     await seededRepo(async (repo) => {
       const outcome = await runGate({

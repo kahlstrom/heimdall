@@ -386,6 +386,11 @@ describe('testsStep', () => {
       }),
     );
     expect(step.kind).toBe('error');
+    if (step.kind === 'error') {
+      expect(step.reason).toBe(
+        'tests: command not found (exit 127); install the tool or fix steps.tests.command',
+      );
+    }
   });
 
   it('is a GATE ERROR when a real command is killed by SIGTERM', async () => {
@@ -937,6 +942,36 @@ describe('knipStep', () => {
       );
       expect(sawLinks).toBe(true);
       expect(step.kind).toBe('fail');
+    });
+  });
+
+  it('is a GATE ERROR when the knip baseline command is missing (exit 127)', async () => {
+    await withKnipRepo(async ({ repo, tmpDir, scope }) => {
+      const current = knipReport({
+        files: [],
+        issues: [{ file: 'src/lib.ts', exports: [{ name: 'helper', line: 1 }] }],
+      });
+      const step = await knipStep.run(
+        ctx({
+          cwd: repo,
+          tmpDir,
+          scope,
+          config: cfg({ steps: { knip: { command: 'npx knip --reporter json' } } }),
+          runCommand: async (...args: Parameters<StepContext['runCommand']>) => {
+            const cwd = args[1];
+            if (cwd.includes('knip-base')) {
+              return result({ exitCode: 127, stderr: 'command not found' });
+            }
+            return result({ exitCode: 1, stdout: current });
+          },
+        }),
+      );
+      expect(step.kind).toBe('error');
+      if (step.kind === 'error') {
+        expect(step.reason).toMatch(
+          /knip: command not found \(exit 127\); install the tool or fix steps\.knip\.command/,
+        );
+      }
     });
   });
 

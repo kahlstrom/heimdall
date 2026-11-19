@@ -60,18 +60,6 @@ describe('commandFailureReason', () => {
     expect(reason).toMatch(/not executable/);
   });
 
-  it('maps shell exit 127 to a missing-tool GATE ERROR', () => {
-    const reason = commandFailureReason('missing-bin', {
-      exitCode: 127,
-      signal: null,
-      stdout: '',
-      stderr: 'missing-bin: command not found',
-      spawnError: undefined,
-      timedOut: false,
-    });
-    expect(reason).toMatch(/not found/);
-  });
-
   it('returns undefined for a normal non-zero exit', () => {
     const reason = commandFailureReason('npm test', {
       exitCode: 1,
@@ -134,6 +122,25 @@ describe('classifyCommandFailure', () => {
     );
     expect(reason).toMatch(/heimdall interrupted \(SIGINT\)/);
   });
+
+  it('names the step and config key when the command is missing (exit 127)', () => {
+    const reason = classifyCommandFailure(
+      'knip',
+      'missing-bin',
+      {
+        exitCode: 127,
+        signal: null,
+        stdout: '',
+        stderr: 'missing-bin: command not found',
+        spawnError: undefined,
+        timedOut: false,
+      },
+      300_000,
+    );
+    expect(reason).toBe(
+      'knip: command not found (exit 127); install the tool or fix steps.knip.command',
+    );
+  });
 });
 
 describe('combinedOutput', () => {
@@ -160,8 +167,9 @@ describe('runCommand', () => {
   });
 
   it('reports a missing binary as a spawn or shell-not-found error', async () => {
-    const result = await runCommand('gate-definitely-missing-binary-xyz', process.cwd(), process.env);
-    const reason = commandFailureReason('gate-definitely-missing-binary-xyz', result);
+    const command = 'gate-definitely-missing-binary-xyz';
+    const result = await runCommand(command, process.cwd(), process.env);
+    const reason = classifyCommandFailure('typecheck', command, result, 300_000);
     expect(reason).toMatch(/not found/i);
   });
 

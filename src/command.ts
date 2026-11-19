@@ -289,6 +289,10 @@ export function gateInterruptReason(signal: AbortSignal): string {
 /**
  * Classify a finished command as a GATE ERROR reason, or undefined if the
  * step should interpret the exit itself (pass/fail).
+ *
+ * Shell exit 127 (command not found) names the step and the config key so
+ * the user can install the tool or fix the command. That path is shared by
+ * every command step, including baseline runs.
  */
 export function classifyCommandFailure(
   label: string,
@@ -302,6 +306,9 @@ export function classifyCommandFailure(
   }
   if (abortSignal?.aborted) {
     return gateInterruptReason(abortSignal);
+  }
+  if (result.exitCode === 127) {
+    return `${label}: command not found (exit 127); install the tool or fix steps.${label}.command`;
   }
   return commandFailureReason(command, result);
 }
@@ -325,9 +332,6 @@ export function commandFailureReason(command: string, result: CommandResult): st
   }
   if (result.exitCode === 126) {
     return `command ${JSON.stringify(command)} is not executable (exit 126)`;
-  }
-  if (result.exitCode === 127) {
-    return `command not found: ${command}`;
   }
   return undefined;
 }
