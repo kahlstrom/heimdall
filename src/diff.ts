@@ -1,9 +1,9 @@
 /**
- * Diff scoping: lint/jscpd fail only on NEW problems in files and lines
+ * Diff scoping: secrets/jscpd fail only on NEW problems in files and lines
  * changed versus the merge-base of the configured base ref (plus untracked files).
- * Knip uses findingsNotInBase instead: it runs on the whole project and keeps
- * findings that do not exist at the merge-base, including leftovers on
- * untouched lines.
+ * ESLint keeps those added-line hits and also uses findingsNotInBase for leftovers
+ * on untouched lines. Knip and architecture run on the whole project and keep
+ * findings that do not exist at the merge-base.
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -373,36 +373,84 @@ export function classifyFindingScope(finding: Finding, scope: DiffScope, repoRoo
   return { kind: 'out' };
 }
 
-export function filterFindingsToScope(
+export type PartitionedFindings = {
+  readonly inScope: readonly Finding[];
+  readonly outOfScope: readonly Finding[];
+};
+
+/**
+ * Split findings into added-line hits versus everything else. Unmapped paths
+ * are a GATE ERROR, never silently dropped or treated as out of scope.
+ */
+export function partitionFindingsByScope(
   findings: readonly Finding[],
   scope: DiffScope,
   repoRoot: string,
-): Result<Finding[]> {
-  const kept: Finding[] = [];
+): Result<PartitionedFindings> {
+  const inScope: Finding[] = [];
+  const outOfScope: Finding[] = [];
   const unmapped: string[] = [];
   for (const finding of findings) {
     const classified = classifyFindingScope(finding, scope, repoRoot);
     if (classified.kind === 'in') {
-      kept.push(finding);
-    } else if (classified.kind === 'unmapped') {
+      inScope.push(finding);
+    } else if (classified.kind === 'out') {
+      outOfScope.push(finding);
+    } else {
       unmapped.push(classified.reason);
     }
   }
   if (unmapped.length > 0) {
     return err(unmapped.join('; '));
   }
-  return ok(kept);
+  return ok({ inScope, outOfScope });
+}
+
+export function filterFindingsToScope(
+  findings: readonly Finding[],
+  scope: DiffScope,
+  repoRoot: string,
+): Result<Finding[]> {
+  const partitioned = partitionFindingsByScope(findings, scope, repoRoot);
+  if (!partitioned.ok) {
+    return partitioned;
+  }
+  return ok([...partitioned.value.inScope]);
 }
 
 /**
  * Identity for new-vs-base comparison. Line is omitted so an unused helper
- * left on an unchanged line still matches the same symbol at HEAD.
+ * left on an unchanged line still matches the same symbol at HEAD. `fileOf`
+ * canonicalizes the file when the same repo path is reported under different
+ * roots (live checkout vs merge-base copy).
  */
-function findingIdentity(finding: Finding): string {
-  return `${finding.step}\0${finding.file}\0${finding.rule}\0${finding.message}`;
+function findingIdentity(finding: Finding, fileOf: (hit: Finding) => string): string {
+  return `${finding.step}\0${fileOf(finding)}\0${finding.rule}\0${finding.message}`;
 }
 
-export function findingsNotInBase(current: readonly Finding[], base: readonly Finding[]): Finding[] {
-  const seen = new Set(base.map(findingIdentity));
-  return current.filter((finding) => !seen.has(findingIdentity(finding)));
+/**
+ * Findings in `current` with no matching identity in `base`, compared as a
+ * multiset: a second identical step+file+rule+message is new.
+ */
+export function findingsNotInBase(
+  current: readonly Finding[],
+  base: readonly Finding[],
+  fileOf: (finding: Finding) => string = (finding) => finding.file,
+): Finding[] {
+  const remaining = new Map<string, number>();
+  for (const finding of base) {
+    const id = findingIdentity(finding, fileOf);
+    remaining.set(id, (remaining.get(id) ?? 0) + 1);
+  }
+  const extra: Finding[] = [];
+  for (const finding of current) {
+    const id = findingIdentity(finding, fileOf);
+    const count = remaining.get(id) ?? 0;
+    if (count > 0) {
+      remaining.set(id, count - 1);
+      continue;
+    }
+    extra.push(finding);
+  }
+  return extra;
 }

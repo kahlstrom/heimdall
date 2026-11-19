@@ -4,7 +4,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { classifyCommandFailure, combinedOutput, type RunCommandFn } from './command.js';
-import { filterFindingsToScope, findingsNotInBase } from './diff.js';
+import { filterFindingsToScope, findingsNotInBase, partitionFindingsByScope, toRepoPath } from './diff.js';
 import { materializeCommit } from './git.js';
 import { classifyFailedTests, parseTestRun } from './flakes.js';
 import { extractJson } from './json.js';
@@ -16,11 +16,13 @@ import {
   parseKnipOutput,
   parseSecretsOutput,
   parseTypecheckOutput,
+  type EslintParsed,
 } from './parsers.js';
 import {
   DEFAULT_STEP_TIMEOUT_MS,
   err,
   errorMessage,
+  isRecord,
   ok,
   type CommandResult,
   type CommandStepName,
@@ -103,6 +105,17 @@ function parseOrError<T>(
     return { kind: 'error', name, reason: parseFailure(parsed.error, result) };
   }
   return parsed.value;
+}
+
+const STEP_RESULT_KINDS = new Set(['pass', 'fail', 'error', 'skipped']);
+
+function isStepResult(value: unknown): value is StepResult {
+  return (
+    isRecord(value) &&
+    typeof value.kind === 'string' &&
+    STEP_RESULT_KINDS.has(value.kind) &&
+    typeof value.name === 'string'
+  );
 }
 
 function parseFailureWithStderr(error: string, result: CommandResult): string {
@@ -286,9 +299,66 @@ export const testsStep: GateStep = {
 };
 
 /**
- * Errors (severity 2+) always fail the step, scoped to the diff. Warnings
- * (severity 1) are ignored unless `maxWarnings` is set; then new warnings on
- * changed files and lines are counted, and more than that cap is RED.
+ * Repo-relative file key so a merge-base copy's absolute ESLint paths match
+ * the live checkout. Tries each root because mocked baseline output may still
+ * use live-checkout paths.
+ */
+function repoFileKey(finding: Finding, roots: readonly string[]): string {
+  for (const root of roots) {
+    const rel = toRepoPath(finding.file, root);
+    if (rel !== undefined) {
+      return rel;
+    }
+  }
+  return finding.file;
+}
+
+/**
+ * Added-line hits always count. Findings on untouched lines count only when
+ * they are new versus the merge-base. Skips that second run when every
+ * finding is already on an added line.
+ */
+async function inScopeOrNewVersusBase(
+  ctx: StepContext,
+  command: string,
+  parsed: EslintParsed,
+): Promise<{ errors: Finding[]; warnings: Finding[] } | StepResult> {
+  const errors = partitionFindingsByScope(parsed.errors, ctx.scope, ctx.cwd);
+  if (!errors.ok) {
+    return { kind: 'error', name: 'eslint', reason: errors.error };
+  }
+  const includeWarnings = ctx.config.steps.eslint?.maxWarnings !== undefined;
+  let warningIn: readonly Finding[] = [];
+  let warningOut: readonly Finding[] = [];
+  if (includeWarnings) {
+    const warnings = partitionFindingsByScope(parsed.warnings, ctx.scope, ctx.cwd);
+    if (!warnings.ok) {
+      return { kind: 'error', name: 'eslint', reason: warnings.error };
+    }
+    warningIn = warnings.value.inScope;
+    warningOut = warnings.value.outOfScope;
+  }
+  if (errors.value.outOfScope.length === 0 && warningOut.length === 0) {
+    return { errors: [...errors.value.inScope], warnings: [...warningIn] };
+  }
+
+  const dest = path.join(ctx.tmpDir, 'eslint-base');
+  const base = await findingsAtMergeBase(ctx, 'eslint', command, parseEslintOutput);
+  if (isStepResult(base)) {
+    return base;
+  }
+  const fileOf = (finding: Finding): string => repoFileKey(finding, [ctx.cwd, dest]);
+  return {
+    errors: [...errors.value.inScope, ...findingsNotInBase(errors.value.outOfScope, base.errors, fileOf)],
+    warnings: [...warningIn, ...findingsNotInBase(warningOut, base.warnings, fileOf)],
+  };
+}
+
+/**
+ * Errors (severity 2+) fail the step when they are on an added line or new
+ * versus the merge-base. Warnings (severity 1) are ignored unless
+ * `maxWarnings` is set; then the same added-line-or-new rule applies, and
+ * more than that cap is RED.
  */
 export const eslintStep: GateStep = {
   name: 'eslint',
@@ -302,24 +372,17 @@ export const eslintStep: GateStep = {
       return ran;
     }
     const parsed = parseOrError('eslint', parseEslintOutput(jsonStdout(ran.result, undefined)), ran.result);
-    if ('kind' in parsed) {
+    if (isStepResult(parsed)) {
       return parsed;
     }
-    const errorScoped = scopedOrPass(eslintStep, parsed.errors, ctx);
-    if (errorScoped.kind === 'error') {
-      return errorScoped;
+    const scoped = await inScopeOrNewVersusBase(ctx, ran.command, parsed);
+    if (isStepResult(scoped)) {
+      return scoped;
     }
-    const findings: Finding[] = errorScoped.kind === 'fail' ? [...errorScoped.findings] : [];
+    const findings: Finding[] = [...scoped.errors];
     const maxWarnings = ctx.config.steps.eslint?.maxWarnings;
-    if (maxWarnings !== undefined) {
-      const warningScoped = scopedOrPass(eslintStep, parsed.warnings, ctx);
-      if (warningScoped.kind === 'error') {
-        return warningScoped;
-      }
-      const warningFindings = warningScoped.kind === 'fail' ? warningScoped.findings : [];
-      if (warningFindings.length > maxWarnings) {
-        findings.push(...warningFindings);
-      }
+    if (maxWarnings !== undefined && scoped.warnings.length > maxWarnings) {
+      findings.push(...scoped.warnings);
     }
     if (findings.length > 0) {
       return { kind: 'fail', name: 'eslint', findings };
@@ -358,7 +421,7 @@ function newVsBaseCommandStep(
       }
 
       const baseFindings = await findingsAtMergeBase(ctx, name, ran.command, parse);
-      if (!Array.isArray(baseFindings)) {
+      if (isStepResult(baseFindings)) {
         return baseFindings;
       }
       const findings = findingsNotInBase(ran.findings, baseFindings);
@@ -377,16 +440,16 @@ export const knipStep: GateStep = newVsBaseCommandStep('knip', parseKnipOutput);
  * `command` there, and parse findings. The copy is removed afterwards; the
  * runner's teardown still deletes HEIMDALL_TMP on abort, timeout, or crash.
  *
- * Step-agnostic on purpose: knip, architecture, and later steps pass their name
+ * Step-agnostic on purpose: knip, architecture, and eslint pass their name
  * and parser. Pair with findingsNotInBase to keep only findings that are new
  * versus base.
  */
-export async function findingsAtMergeBase(
+export async function findingsAtMergeBase<T>(
   ctx: StepContext,
   stepName: CommandStepName,
   command: string,
-  parse: (output: string) => Result<Finding[]>,
-): Promise<Finding[] | StepResult> {
+  parse: (output: string) => Result<T>,
+): Promise<T | StepResult> {
   const dest = path.join(ctx.tmpDir, `${stepName}-base`);
   try {
     const timeoutMs = stepTimeoutMs(ctx.config, stepName);
@@ -411,7 +474,7 @@ export async function findingsAtMergeBase(
       return { kind: 'error', name: stepName, reason: `${stepName} baseline: ${crash}` };
     }
     const parsed = parseOrError(stepName, parse(baseRan.stdout), baseRan);
-    if (!Array.isArray(parsed)) {
+    if (isStepResult(parsed)) {
       if (parsed.kind === 'error') {
         return { kind: 'error', name: stepName, reason: `${stepName} baseline: ${parsed.reason}` };
       }

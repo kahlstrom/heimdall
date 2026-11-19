@@ -22,6 +22,7 @@ import { commandResult as result, parseTestConfig as cfg } from '../test/helpers
 import { commitAll, git, withTempRepo, writeRepoFile } from '../test/helpers/temp-repo.js';
 
 const GATE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const ESLINT_BIN = path.join(GATE_ROOT, 'node_modules', '.bin', 'eslint');
 const KNIP_BIN = path.join(GATE_ROOT, 'node_modules', '.bin', 'knip');
 const VITEST_BIN = path.join(GATE_ROOT, 'node_modules', '.bin', 'vitest');
 
@@ -148,23 +149,27 @@ describe('eslintStep', () => {
     expect(step.kind).toBe('pass');
   });
 
-  it('passes when the only findings are outside the diff', async () => {
+  it('does not run a baseline when the only error is on an added line', async () => {
+    let calls = 0;
     const step = await eslintStep.run(
       ctx({
         config: cfg({ steps: { eslint: { command: 'npx eslint -f json' } } }),
-        runCommand: async () =>
-          result({
+        runCommand: async () => {
+          calls += 1;
+          return result({
             exitCode: 1,
             stdout: JSON.stringify([
               {
-                filePath: path.join(STEP_FILES, 'src/old.ts'),
+                filePath: path.join(STEP_FILES, 'src/a.ts'),
                 messages: [{ line: 1, ruleId: 'eqeqeq', message: 'use ===', severity: 2 }],
               },
             ]),
-          }),
+          });
+        },
       }),
     );
-    expect(step.kind).toBe('pass');
+    expect(step.kind).toBe('fail');
+    expect(calls).toBe(1);
   });
 
   it('does not pass when killed by a signal even if findings are out of scope', async () => {
@@ -298,25 +303,6 @@ describe('eslintStep', () => {
     expect(step.kind).toBe('pass');
   });
 
-  it('ignores warnings on unchanged lines even when maxWarnings is set', async () => {
-    const step = await eslintStep.run(
-      ctx({
-        config: cfg({ steps: { eslint: { command: 'npx eslint -f json', maxWarnings: 0 } } }),
-        runCommand: async () =>
-          result({
-            exitCode: 0,
-            stdout: JSON.stringify([
-              {
-                filePath: path.join(STEP_FILES, 'src/a.ts'),
-                messages: [{ line: 2, ruleId: 'no-console', message: 'unexpected console', severity: 1 }],
-              },
-            ]),
-          }),
-      }),
-    );
-    expect(step.kind).toBe('pass');
-  });
-
   it('still fails on new errors when maxWarnings is set', async () => {
     const step = await eslintStep.run(
       ctx({
@@ -335,7 +321,253 @@ describe('eslintStep', () => {
     );
     expect(step.kind).toBe('fail');
   });
+
+  it('fails on a new unused import on an unchanged line', async () => {
+    await withTempRepo(async (repo) => {
+      writeRepoFile(repo, 'package.json', JSON.stringify({ name: 'fixture', type: 'module' }));
+      writeRepoFile(
+        repo,
+        'eslint.config.js',
+        `export default [{
+  files: ['**/*.js'],
+  languageOptions: { ecmaVersion: 2022, sourceType: 'module' },
+  rules: { 'no-unused-vars': 'error' },
+}];
+`,
+      );
+      writeRepoFile(repo, 'src/lib.js', 'export function helper() { return 1; }\n');
+      writeRepoFile(repo, 'src/used.js', "import { helper } from './lib.js';\nexport const n = helper();\n");
+      commitAll(repo, 'base');
+      const mergeBaseSha = git(repo, ['rev-parse', 'HEAD']).trim();
+      git(repo, ['checkout', '-q', '-b', 'feat']);
+      writeRepoFile(repo, 'src/used.js', "import { helper } from './lib.js';\nexport const n = 1;\n");
+      commitAll(repo, 'feat');
+      fs.symlinkSync(path.join(GATE_ROOT, 'node_modules'), path.join(repo, 'node_modules'));
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-eslint-unused-'));
+      try {
+        const step = await eslintStep.run(
+          ctx({
+            cwd: repo,
+            tmpDir,
+            scope: {
+              baseRef: 'main',
+              mergeBaseSha,
+              changedFiles: new Set(['src/used.js']),
+              addedLines: new Map([['src/used.js', new Set([2])]]),
+            },
+            config: cfg({
+              steps: { eslint: { command: `${JSON.stringify(ESLINT_BIN)} . -f json` } },
+            }),
+            runCommand,
+          }),
+        );
+        expect(step.kind).toBe('fail');
+        if (step.kind === 'fail') {
+          expect(step.findings.some((hit) => hit.rule === 'no-unused-vars' && hit.line === 1)).toBe(true);
+          expect(step.findings.map(formatFinding).some((line) => /used\.js:1 \[no-unused-vars\]/.test(line))).toBe(
+            true,
+          );
+        }
+      } finally {
+        try {
+          fs.unlinkSync(path.join(repo, 'node_modules'));
+        } catch {
+          // The symlink is removed first so recursive rm cannot walk the real install.
+        }
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it('passes when the only error on an unchanged line already existed at the merge-base', async () => {
+    await withEslintRepo(async ({ repo, tmpDir, scope }) => {
+      const file = path.join(repo, 'src/old.ts');
+      const report = JSON.stringify([
+        {
+          filePath: file,
+          messages: [{ line: 1, ruleId: 'eqeqeq', message: 'use ===', severity: 2 }],
+        },
+      ]);
+      let calls = 0;
+      const twoShot = eslintTwoShot(report, report);
+      const step = await eslintStep.run(
+        ctx({
+          cwd: repo,
+          tmpDir,
+          scope,
+          config: cfg({ steps: { eslint: { command: 'npx eslint -f json' } } }),
+          runCommand: async (...args: Parameters<StepContext['runCommand']>) => {
+            calls += 1;
+            return twoShot(...args);
+          },
+        }),
+      );
+      expect(step.kind).toBe('pass');
+      expect(calls).toBe(2);
+    });
+  });
+
+  it('fails on a second identical finding that is new versus the merge-base', async () => {
+    await withEslintRepo(async ({ repo, tmpDir, scope }) => {
+      const file = path.join(repo, 'src/old.ts');
+      const current = JSON.stringify([
+        {
+          filePath: file,
+          messages: [
+            { line: 1, ruleId: 'eqeqeq', message: 'use ===', severity: 2 },
+            { line: 4, ruleId: 'eqeqeq', message: 'use ===', severity: 2 },
+          ],
+        },
+      ]);
+      const base = JSON.stringify([
+        {
+          filePath: file,
+          messages: [{ line: 1, ruleId: 'eqeqeq', message: 'use ===', severity: 2 }],
+        },
+      ]);
+      const step = await eslintStep.run(
+        ctx({
+          cwd: repo,
+          tmpDir,
+          scope,
+          config: cfg({ steps: { eslint: { command: 'npx eslint -f json' } } }),
+          runCommand: eslintTwoShot(current, base),
+        }),
+      );
+      expect(step.kind).toBe('fail');
+      if (step.kind === 'fail') {
+        expect(step.findings).toHaveLength(1);
+        expect(step.findings.map(formatFinding)).toEqual([`${file}:4 [eqeqeq] use ===`]);
+      }
+    });
+  });
+
+  it('is a GATE ERROR when the eslint baseline command is missing (exit 127)', async () => {
+    await withEslintRepo(async ({ repo, tmpDir, scope }) => {
+      const current = JSON.stringify([
+        {
+          filePath: path.join(repo, 'src/old.ts'),
+          messages: [{ line: 1, ruleId: 'eqeqeq', message: 'use ===', severity: 2 }],
+        },
+      ]);
+      const step = await eslintStep.run(
+        ctx({
+          cwd: repo,
+          tmpDir,
+          scope,
+          config: cfg({ steps: { eslint: { command: 'npx eslint -f json' } } }),
+          runCommand: async (...args: Parameters<StepContext['runCommand']>) => {
+            const cwd = args[1];
+            if (cwd.includes('eslint-base')) {
+              return result({ exitCode: 127, stderr: 'command not found' });
+            }
+            return result({ exitCode: 1, stdout: current });
+          },
+        }),
+      );
+      expect(step.kind).toBe('error');
+      if (step.kind === 'error') {
+        expect(step.reason).toMatch(
+          /eslint: command not found \(exit 127\); install the tool or fix steps\.eslint\.command/,
+        );
+      }
+    });
+  });
+
+  it('passes when a warning on an unchanged line already existed at the merge-base', async () => {
+    await withEslintRepo(async ({ repo, tmpDir, scope }) => {
+      const report = JSON.stringify([
+        {
+          filePath: path.join(repo, 'src/a.ts'),
+          messages: [{ line: 1, ruleId: 'no-console', message: 'unexpected console', severity: 1 }],
+        },
+      ]);
+      let calls = 0;
+      const twoShot = eslintTwoShot(report, report, 0);
+      const step = await eslintStep.run(
+        ctx({
+          cwd: repo,
+          tmpDir,
+          scope: {
+            ...scope,
+            addedLines: new Map([['src/a.ts', new Set([3])]]),
+          },
+          config: cfg({ steps: { eslint: { command: 'npx eslint -f json', maxWarnings: 0 } } }),
+          runCommand: async (...args: Parameters<StepContext['runCommand']>) => {
+            calls += 1;
+            return twoShot(...args);
+          },
+        }),
+      );
+      expect(step.kind).toBe('pass');
+      expect(calls).toBe(2);
+    });
+  });
+
+  it('is red when a new warning on an unchanged line exceeds maxWarnings', async () => {
+    await withEslintRepo(async ({ repo, tmpDir, scope }) => {
+      const file = path.join(repo, 'src/a.ts');
+      const current = JSON.stringify([
+        {
+          filePath: file,
+          messages: [{ line: 1, ruleId: 'no-console', message: 'unexpected console', severity: 1 }],
+        },
+      ]);
+      const step = await eslintStep.run(
+        ctx({
+          cwd: repo,
+          tmpDir,
+          scope: {
+            ...scope,
+            addedLines: new Map([['src/a.ts', new Set([3])]]),
+          },
+          config: cfg({ steps: { eslint: { command: 'npx eslint -f json', maxWarnings: 0 } } }),
+          runCommand: eslintTwoShot(current, '[]', 0),
+        }),
+      );
+      expect(step.kind).toBe('fail');
+      if (step.kind === 'fail') {
+        expect(step.findings.map(formatFinding)).toEqual([`${file}:1 [no-console] unexpected console`]);
+      }
+    });
+  });
 });
+
+function eslintTwoShot(current: string, base: string, exitCode = 1): StepContext['runCommand'] {
+  return async (...args: Parameters<StepContext['runCommand']>) => {
+    const cwd = args[1];
+    if (cwd.includes('eslint-base')) {
+      return result({ exitCode, stdout: base });
+    }
+    return result({ exitCode, stdout: current });
+  };
+}
+
+async function withEslintRepo(
+  fn: (args: { repo: string; tmpDir: string; mergeBaseSha: string; scope: DiffScope }) => Promise<void>,
+): Promise<void> {
+  await withTempRepo(async (repo) => {
+    writeRepoFile(repo, 'src/a.ts', 'export const a = 1;\nexport const leftover = 2;\n');
+    writeRepoFile(repo, 'src/old.ts', 'export const old = 1;\n');
+    commitAll(repo, 'base');
+    const mergeBaseSha = git(repo, ['rev-parse', 'HEAD']).trim();
+    git(repo, ['checkout', '-q', '-b', 'feat']);
+    writeRepoFile(repo, 'src/a.ts', 'export const a = 1;\nexport const leftover = 2;\nexport const added = 3;\n');
+    commitAll(repo, 'feat');
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-eslint-step-'));
+    try {
+      const scope: DiffScope = {
+        baseRef: 'main',
+        mergeBaseSha,
+        changedFiles: new Set(['src/a.ts']),
+        addedLines: new Map([['src/a.ts', new Set([3])]]),
+      };
+      await fn({ repo, tmpDir, mergeBaseSha, scope });
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+}
 
 const SECRETS_LEAK = 'ghp_LEAKEDSECRETVALUE_doNotPrint';
 

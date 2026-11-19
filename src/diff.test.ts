@@ -202,6 +202,18 @@ describe('findingsNotInBase', () => {
     const base = [hit('src/legacy.ts', 'exports', 'leftover', 1)];
     expect(findingsNotInBase(current, base)).toEqual([]);
   });
+
+  it('keeps a second identical finding when the base only has one', () => {
+    const current = [hit('src/a.ts', 'no-unused-vars', 'x', 4), hit('src/a.ts', 'no-unused-vars', 'x', 10)];
+    const base = [hit('src/a.ts', 'no-unused-vars', 'x', 4)];
+    expect(findingsNotInBase(current, base)).toEqual([current[1]]);
+  });
+
+  it('drops two identical findings when the base has both', () => {
+    const current = [hit('src/a.ts', 'no-unused-vars', 'x', 4), hit('src/a.ts', 'no-unused-vars', 'x', 10)];
+    const base = [hit('src/a.ts', 'no-unused-vars', 'x', 1), hit('src/a.ts', 'no-unused-vars', 'x', 2)];
+    expect(findingsNotInBase(current, base)).toEqual([]);
+  });
 });
 
 describe('toRepoPath', () => {
