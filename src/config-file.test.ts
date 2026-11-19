@@ -215,6 +215,25 @@ describe('resolveConfigPath', () => {
     });
   });
 
+  it('lists each tried path once when $HEIMDALL_HOME/<name> is the git root', () => {
+    // Unique name so a real ~/.heimdall folder cannot satisfy this lookup.
+    withLookupDirs('overlapparent', ({ gitRoot, lookupName }) => {
+      const env = { HEIMDALL_HOME: path.dirname(gitRoot) };
+      const looked = resolveConfigPath(gitRoot, gitRoot, lookupName, undefined, env);
+      expect(looked.ok).toBe(false);
+      if (!looked.ok) {
+        const inRepoPath = path.join(gitRoot, DEFAULT_CONFIG_NAME);
+        const legacyPath = path.join(gitRoot, LEGACY_CONFIG_NAME);
+        expect(looked.error.split(inRepoPath)).toHaveLength(2);
+        expect(looked.error.split(legacyPath)).toHaveLength(2);
+        const tried = looked.error.split('\n').slice(1).map((line) => line.trim());
+        expect(tried[0]).toBe(inRepoPath);
+        expect(tried[1]).toBe(legacyPath);
+        expect(new Set(tried).size).toBe(tried.length);
+      }
+    });
+  });
+
   it('is a GATE ERROR that lists every path it tried, including lowercase and the legacy filename', () => {
     // Unique name so a real ~/.heimdall/my-app cannot satisfy this lookup.
     withLookupDirs('LookupCase', ({ gitRoot, gateHome, env, lookupName }) => {

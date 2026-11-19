@@ -215,26 +215,27 @@ function inRepoConfigCandidates(gitRoot: string): readonly ConfigCandidate[] {
 }
 
 /**
- * Home lookup uses one repo name from the git common dir, then lowercased when
- * that differs (`~/Projects/MyApp` finds `$HEIMDALL_HOME/myapp`). The work-tree
- * folder basename is not a separate candidate. `$HEIMDALL_HOME` defaults to this
- * package's `configs/` (from the CLI install location). `~/.heimdall/<name>/` is
- * then tried, then `~/.gate/<name>/` for compatibility. A config outside the git
- * root is not in the story diff, so the in-repo config-change guard ignores it;
- * uncommitted files in that config directory are a separate RED check.
+ * Appends home-config paths onto `candidates`, skipping paths already present
+ * (`$HEIMDALL_HOME/<name>` can be the git root itself). Home lookup uses one
+ * repo name from the git common dir, then lowercased when that differs
+ * (`~/Projects/MyApp` finds `$HEIMDALL_HOME/myapp`). The work-tree folder
+ * basename is not a separate candidate. `$HEIMDALL_HOME` defaults to this
+ * package's `configs/` (from the CLI install location). `~/.heimdall/<name>/`
+ * is then tried, then `~/.gate/<name>/` for compatibility. A config outside the
+ * git root is not in the story diff, so the in-repo config-change guard ignores
+ * it; uncommitted files in that config directory are a separate RED check.
  */
 function homeConfigCandidates(
+  candidates: ConfigCandidate[],
   lookupName: string,
   env: NodeJS.ProcessEnv,
-): readonly ConfigCandidate[] {
+): void {
   const home = resolveHeimdallHome(env);
   const heimdallHome = heimdallFallbackHome();
   const compatHome = compatibilityGateHome();
-  const candidates: ConfigCandidate[] = [];
   addNamedHomeCandidates(candidates, home, lookupName);
   addHomeIfDistinct(candidates, heimdallHome, [home], lookupName);
   addHomeIfDistinct(candidates, compatHome, [home, heimdallHome], lookupName);
-  return candidates;
 }
 
 function missingConfigError(tried: readonly string[]): string {
@@ -545,8 +546,8 @@ export function loadGateConfigFile(configPath: string): Result<GateConfig> {
  * `--config` is exclusive: `lookupName` is not called, and the git root and
  * `$HEIMDALL_HOME` are not consulted. An in-repo config is returned without
  * calling `lookupName`. Missing means GATE ERROR listing every path that was
- * tried. `gate.config.json` is accepted as a deprecated fallback after
- * `heimdall.config.json`.
+ * tried, each once, in order. `gate.config.json` is accepted as a deprecated
+ * fallback after `heimdall.config.json`.
  */
 export function resolveConfigPath(
   cwd: string,
@@ -562,8 +563,8 @@ export function resolveConfigPath(
     }
     return err(missingConfigError([filePath]));
   }
-  const inRepo = inRepoConfigCandidates(gitRoot);
-  for (const candidate of inRepo) {
+  const candidates = [...inRepoConfigCandidates(gitRoot)];
+  for (const candidate of candidates) {
     if (candidate.exists()) {
       return ok(candidate.path);
     }
@@ -572,11 +573,12 @@ export function resolveConfigPath(
   if (!name.ok) {
     return name;
   }
-  const home = homeConfigCandidates(name.value, env);
-  for (const candidate of home) {
+  const inRepoCount = candidates.length;
+  homeConfigCandidates(candidates, name.value, env);
+  for (const candidate of candidates.slice(inRepoCount)) {
     if (candidate.exists()) {
       return ok(candidate.path);
     }
   }
-  return err(missingConfigError([...inRepo, ...home].map((candidate) => candidate.path)));
+  return err(missingConfigError(candidates.map((candidate) => candidate.path)));
 }
