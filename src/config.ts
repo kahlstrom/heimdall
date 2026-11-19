@@ -445,12 +445,14 @@ export function parseGateConfig(raw: unknown, configPath: string): Result<GateCo
     eslint: EslintStepConfig | undefined;
     knip: CommandStepConfig | undefined;
     jscpd: CommandStepConfig | undefined;
+    secrets: CommandStepConfig | undefined;
   } = {
     typecheck: undefined,
     tests: undefined,
     eslint: undefined,
     knip: undefined,
     jscpd: undefined,
+    secrets: undefined,
   };
 
   for (const name of COMMAND_STEP_NAMES) {

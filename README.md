@@ -79,6 +79,7 @@ so a missing binary is a GATE ERROR instead of a download:
 | ESLint | `steps.eslint` |
 | knip | `steps.knip` (unused files, exports, deps) |
 | jscpd | `steps.jscpd` (copy-paste) |
+| secretlint | `steps.secrets` (optional; off unless configured) |
 
 `line-checks` is built in and needs no extra binary.
 
@@ -208,8 +209,8 @@ still includes the `base:` line.
 
 ### `steps.<name>` command steps
 
-Allowed names: `typecheck`, `tests`, `eslint`, `knip`, `jscpd`. A missing step
-is off. A present step is on unless `"enabled": false`.
+Allowed names: `typecheck`, `tests`, `eslint`, `knip`, `jscpd`, `secrets`. A
+missing step is off. A present step is on unless `"enabled": false`.
 
 | Key | Type | Default | Example |
 | --- | --- | --- | --- |
@@ -226,6 +227,7 @@ A timeout is a GATE ERROR that names the step and the budget.
 | `eslint` | Prefer `-f json` so findings can be scoped. Extra key: `maxWarnings`. |
 | `knip` | Prefer `--reporter json`. |
 | `jscpd` | Must print JSON on stdout. `$HEIMDALL_TMP` is a per-run temp dir. |
+| `secrets` | Prefer secretlint 14.x `--format json`. No default command. Findings are scoped to added lines; the report prints rule id and `file:line` only, never the matched secret. |
 
 #### `steps.eslint.maxWarnings`
 
@@ -255,7 +257,7 @@ Built-in. No command.
 
 ### New problems only
 
-Lint and jscpd findings are limited to **files and lines changed versus the
+Lint, secrets, and jscpd findings are limited to **files and lines changed versus the
 merge-base of `baseRef`**, including uncommitted and untracked files. Knip runs
 on the **whole project** and fails only on findings that are **not present at
 the merge-base** (a helper left unused after its last caller is deleted is

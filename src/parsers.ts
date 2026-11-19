@@ -27,6 +27,32 @@ function asString(value: unknown, fallback: string): string {
   return typeof value === 'string' ? value : fallback;
 }
 
+/**
+ * Walk ESLint-shaped `{ filePath, messages }[]` output. secretlint `--format json`
+ * uses the same envelope. Callers supply the per-message Finding; this loop
+ * never reads `message` text.
+ */
+function forEachFileMessage(
+  files: readonly unknown[],
+  onMessage: (file: string, message: Record<string, unknown>) => void,
+): void {
+  for (const entry of files) {
+    if (!isRecord(entry)) {
+      continue;
+    }
+    const file = asString(entry.filePath, '');
+    if (!file || !Array.isArray(entry.messages)) {
+      continue;
+    }
+    for (const message of entry.messages) {
+      if (!isRecord(message)) {
+        continue;
+      }
+      onMessage(file, message);
+    }
+  }
+}
+
 export type EslintParsed = {
   readonly errors: readonly Finding[];
   readonly warnings: readonly Finding[];
@@ -51,33 +77,21 @@ function parseEslintJson(value: unknown): Result<EslintParsed> {
   }
   const errors: Finding[] = [];
   const warnings: Finding[] = [];
-  for (const entry of value) {
-    if (!isRecord(entry)) {
-      continue;
+  forEachFileMessage(value, (file, message) => {
+    const severity = asNumber(message.severity, 2);
+    if (severity < 1) {
+      return;
     }
-    const file = asString(entry.filePath, '');
-    if (!file || !Array.isArray(entry.messages)) {
-      continue;
+    const line = asNumber(message.line, 0);
+    const rule = asString(message.ruleId, 'eslint');
+    const text = asString(message.message, severity >= 2 ? 'eslint error' : 'eslint warning');
+    const hit = finding('eslint', file, line, rule || 'eslint', text);
+    if (severity >= 2) {
+      errors.push(hit);
+    } else {
+      warnings.push(hit);
     }
-    for (const message of entry.messages) {
-      if (!isRecord(message)) {
-        continue;
-      }
-      const severity = asNumber(message.severity, 2);
-      if (severity < 1) {
-        continue;
-      }
-      const line = asNumber(message.line, 0);
-      const rule = asString(message.ruleId, 'eslint');
-      const text = asString(message.message, severity >= 2 ? 'eslint error' : 'eslint warning');
-      const hit = finding('eslint', file, line, rule || 'eslint', text);
-      if (severity >= 2) {
-        errors.push(hit);
-      } else {
-        warnings.push(hit);
-      }
-    }
-  }
+  });
   return ok({ errors, warnings });
 }
 
@@ -355,6 +369,50 @@ function fileLoc(value: unknown): { file: string; start: number; end: number } |
   const start = asNumber(value.start, 1);
   const end = asNumber(value.end, start);
   return { file, start, end };
+}
+
+/**
+ * secretlint `--format json` (pinned 14.x). Results are an ESLint-like array of
+ * `{ filePath, messages }`. Each message has `ruleId` and `loc.start.line`
+ * (and sometimes `line` when a lint formatter converted the result).
+ *
+ * Findings never copy `message`, `data`, `raw`, or `sourceContent`: those fields
+ * can hold the matched secret. Reports print rule id, file, and line only.
+ */
+export function parseSecretsOutput(output: string): Result<Finding[]> {
+  const json = extractJson(output);
+  if (!json.ok) {
+    return err(`secrets output is not JSON (${json.error})`);
+  }
+  return parseSecretsJson(json.value);
+}
+
+export function parseSecretsJson(value: unknown): Result<Finding[]> {
+  if (!Array.isArray(value)) {
+    return err('secrets JSON must be an array of file results');
+  }
+  const findings: Finding[] = [];
+  forEachFileMessage(value, (file, message) => {
+    const rule = asString(message.ruleId, 'secrets') || 'secrets';
+    findings.push(finding('secrets', file, secretlintMessageLine(message), rule, ''));
+  });
+  return ok(findings);
+}
+
+function secretlintMessageLine(message: Record<string, unknown>): number {
+  if (typeof message.line === 'number' && Number.isFinite(message.line)) {
+    return message.line;
+  }
+  if (!isRecord(message.loc)) {
+    return 0;
+  }
+  if (typeof message.loc.line === 'number' && Number.isFinite(message.loc.line)) {
+    return message.loc.line;
+  }
+  if (isRecord(message.loc.start)) {
+    return asNumber(message.loc.start.line, 0);
+  }
+  return 0;
 }
 
 /**

@@ -43,8 +43,8 @@ Follow these for the whole setup, even if a step seems to need otherwise:
   findings, or **GATE ERROR (exit 2)** when Heimdall itself or its setup is
   broken.
 - It compares the working tree (including uncommitted and untracked files) to
-  the merge-base of a base ref and fails only on **new** problems. Lint and
-  jscpd findings are limited to changed files and lines; knip fails only on
+  the merge-base of a base ref and fails only on **new** problems. Lint, secrets,
+  and jscpd findings are limited to changed files and lines; knip fails only on
   findings that are not present at the merge-base. Tests and typecheck run in
   full. Built-in `line-checks` look only at added lines.
 - Each repo needs a `heimdall.config.json` that lists the commands to run.

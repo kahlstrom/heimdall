@@ -9,7 +9,13 @@ import { materializeCommit } from './git.js';
 import { classifyFailedTests, parseTestRun } from './flakes.js';
 import { extractJson } from './json.js';
 import { runLineChecks } from './line-checks.js';
-import { parseEslintOutput, parseJscpdOutput, parseKnipOutput, parseTypecheckOutput } from './parsers.js';
+import {
+  parseEslintOutput,
+  parseJscpdOutput,
+  parseKnipOutput,
+  parseSecretsOutput,
+  parseTypecheckOutput,
+} from './parsers.js';
 import {
   DEFAULT_STEP_TIMEOUT_MS,
   err,
@@ -450,6 +456,41 @@ function shareNodeModules(fromRepo: string, dest: string): Result<void> {
 
 export const jscpdStep: GateStep = jsonToolStep('jscpd', parseJscpdOutput, 'jscpd-report.json');
 
+/**
+ * secretlint JSON, scoped to added lines the same way eslint is. Findings
+ * carry rule id, file, and line only — never secretlint's message text.
+ */
+export const secretsStep: GateStep = {
+  name: 'secrets',
+  scopeToDiff: true,
+  isEnabled(config) {
+    return config.steps.secrets?.enabled === true;
+  },
+  async run(ctx) {
+    const ran = await runConfigured(ctx, 'secrets');
+    if (!('result' in ran)) {
+      return ran;
+    }
+    const parsed = parseOrError('secrets', parseSecretsOutput(jsonStdout(ran.result, undefined)), ran.result);
+    if (!Array.isArray(parsed)) {
+      return parsed;
+    }
+    const scoped = scopedOrPass(secretsStep, parsed, ctx);
+    if (scoped.kind !== 'pass') {
+      return scoped;
+    }
+    if (ran.result.exitCode === 0 || parsed.length > 0) {
+      return { kind: 'pass', name: 'secrets' };
+    }
+    // Do not attach stdout: it may contain secretlint message text or matched secrets.
+    return {
+      kind: 'error',
+      name: 'secrets',
+      reason: `secrets command ${JSON.stringify(ran.command)} exited ${ran.result.exitCode ?? 'null'} without parseable findings`,
+    };
+  },
+};
+
 export const lineChecksStep: GateStep = {
   name: 'line-checks',
   scopeToDiff: true,
@@ -480,5 +521,6 @@ export const STEPS: readonly GateStep[] = [
   eslintStep,
   knipStep,
   jscpdStep,
+  secretsStep,
   lineChecksStep,
 ];

@@ -68,8 +68,15 @@ describe('heimdall.config.json', () => {
       return;
     }
     for (const name of COMMAND_STEP_NAMES) {
-      expect(own.value.steps[name]?.command).toContain('npx --no-install');
+      const command = own.value.steps[name]?.command;
+      if (command === undefined) {
+        expect(name).toBe('secrets');
+        continue;
+      }
+      expect(command).toContain('npx --no-install');
     }
+    expect(own.value.steps.secrets).toBeUndefined();
+    expect(example.value.steps.secrets).toBeUndefined();
     expect(own.value.steps.jscpd?.command).toBe(example.value.steps.jscpd?.command);
     expect(own.value.steps.knip?.command).toContain('--production');
   });
@@ -360,6 +367,25 @@ describe('parseGateConfig', () => {
   it('rejects empty flake strings', () => {
     const parsed = parseGateConfig({ steps: { tests: { command: 't' } }, flakes: [''] }, 'x');
     expect(parsed.ok).toBe(false);
+  });
+
+  it('leaves secrets off when omitted and requires a command when enabled', () => {
+    const omitted = parseGateConfig({ steps: { tests: { command: 't' } } }, 'x');
+    expect(omitted.ok).toBe(true);
+    if (omitted.ok) {
+      expect(omitted.value.steps.secrets).toBeUndefined();
+    }
+    const enabled = parseGateConfig({ steps: { secrets: { command: 'secretlint --format json "**/*"' } } }, 'x');
+    expect(enabled.ok).toBe(true);
+    if (enabled.ok) {
+      expect(enabled.value.steps.secrets?.enabled).toBe(true);
+      expect(enabled.value.steps.secrets?.command).toBe('secretlint --format json "**/*"');
+    }
+    const missingCommand = parseGateConfig({ steps: { secrets: { enabled: true } } }, 'x');
+    expect(missingCommand.ok).toBe(false);
+    if (!missingCommand.ok) {
+      expect(missingCommand.error).toMatch(/steps\.secrets\.command/);
+    }
   });
 });
 

@@ -10,6 +10,7 @@ import {
   jscpdStep,
   knipStep,
   lineChecksStep,
+  secretsStep,
   testsStep,
   typecheckStep,
   type StepContext,
@@ -332,6 +333,119 @@ describe('eslintStep', () => {
       }),
     );
     expect(step.kind).toBe('fail');
+  });
+});
+
+const SECRETS_LEAK = 'ghp_LEAKEDSECRETVALUE_doNotPrint';
+
+function secretsJson(filePath: string, line: number, ruleId = '@secretlint/secretlint-rule-github'): string {
+  return JSON.stringify([
+    {
+      filePath,
+      messages: [
+        {
+          ruleId,
+          message: `found GitHub Token: ${SECRETS_LEAK}`,
+          data: { ID: SECRETS_LEAK },
+          loc: { start: { line, column: 1 }, end: { line, column: 40 } },
+        },
+      ],
+    },
+  ]);
+}
+
+describe('secretsStep', () => {
+  it('is off unless the repo config enables it with a command', () => {
+    expect(secretsStep.isEnabled(cfg({ steps: { tests: { command: 't' } } }))).toBe(false);
+    expect(
+      secretsStep.isEnabled(cfg({ steps: { tests: { command: 't' }, secrets: { enabled: false } } })),
+    ).toBe(false);
+    expect(secretsStep.isEnabled(cfg({ steps: { secrets: { command: 'secretlint --format json "**/*"' } } }))).toBe(
+      true,
+    );
+  });
+
+  it('is a GATE ERROR when secretlint output is not JSON', async () => {
+    const step = await secretsStep.run(
+      ctx({
+        config: cfg({ steps: { secrets: { command: 'secretlint --format json "**/*"' } } }),
+        runCommand: async () => result({ exitCode: 1, stdout: `found secret: ${SECRETS_LEAK}` }),
+      }),
+    );
+    expect(step.kind).toBe('error');
+    if (step.kind === 'error') {
+      expect(step.reason).toMatch(/not JSON/);
+      expect(step.reason).not.toContain(SECRETS_LEAK);
+    }
+  });
+
+  it('is a GATE ERROR when the command is missing (exit 127)', async () => {
+    const step = await secretsStep.run(
+      ctx({
+        config: cfg({ steps: { secrets: { command: 'secretlint --format json "**/*"' } } }),
+        runCommand: async () => result({ exitCode: 127, stderr: 'secretlint: command not found' }),
+      }),
+    );
+    expect(step.kind).toBe('error');
+    if (step.kind === 'error') {
+      expect(step.reason).toBe(
+        'secrets: command not found (exit 127); install the tool or fix steps.secrets.command',
+      );
+    }
+  });
+
+  it('passes when the only findings are outside the diff', async () => {
+    const step = await secretsStep.run(
+      ctx({
+        config: cfg({ steps: { secrets: { command: 'secretlint --format json "**/*"' } } }),
+        runCommand: async () =>
+          result({
+            exitCode: 1,
+            stdout: secretsJson(path.join(STEP_FILES, 'src/old.ts'), 1),
+          }),
+      }),
+    );
+    expect(step.kind).toBe('pass');
+  });
+
+  it('passes when a finding is in a changed file but not on an added line', async () => {
+    const step = await secretsStep.run(
+      ctx({
+        config: cfg({ steps: { secrets: { command: 'secretlint --format json "**/*"' } } }),
+        runCommand: async () =>
+          result({
+            exitCode: 1,
+            stdout: secretsJson(path.join(STEP_FILES, 'src/a.ts'), 2),
+          }),
+      }),
+    );
+    expect(step.kind).toBe('pass');
+  });
+
+  it('is red for a finding on an added line and lists rule id plus file:line only', async () => {
+    const file = path.join(STEP_FILES, 'src/a.ts');
+    const step = await secretsStep.run(
+      ctx({
+        config: cfg({ steps: { secrets: { command: 'secretlint --format json "**/*"' } } }),
+        runCommand: async () =>
+          result({
+            exitCode: 1,
+            stdout: secretsJson(file, 1),
+          }),
+      }),
+    );
+    expect(step.kind).toBe('fail');
+    if (step.kind === 'fail') {
+      expect(step.findings).toHaveLength(1);
+      expect(step.findings[0]?.rule).toBe('@secretlint/secretlint-rule-github');
+      expect(step.findings[0]?.file).toBe(file);
+      expect(step.findings[0]?.line).toBe(1);
+      expect(step.findings[0]?.message).toBe('');
+      expect(step.findings.map(formatFinding)).toEqual([`${file}:1 [@secretlint/secretlint-rule-github]`]);
+      expect(JSON.stringify(step.findings)).not.toContain(SECRETS_LEAK);
+      expect(step.findings.map(formatFinding).join('\n')).not.toContain(SECRETS_LEAK);
+      expect(step.findings.map(formatFinding).join('\n')).not.toContain('found GitHub Token');
+    }
   });
 });
 

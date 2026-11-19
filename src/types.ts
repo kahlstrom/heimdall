@@ -18,7 +18,7 @@ export const DEFAULT_MAX_CHANGED_FILES = 100;
 
 export type ExitCode = typeof EXIT_GREEN | typeof EXIT_RED | typeof EXIT_GATE_ERROR;
 
-export const COMMAND_STEP_NAMES = ['typecheck', 'tests', 'eslint', 'knip', 'jscpd'] as const;
+export const COMMAND_STEP_NAMES = ['typecheck', 'tests', 'eslint', 'knip', 'jscpd', 'secrets'] as const;
 export type CommandStepName = (typeof COMMAND_STEP_NAMES)[number];
 
 export const STEP_NAMES = [...COMMAND_STEP_NAMES, 'line-checks'] as const;
@@ -77,6 +77,7 @@ export type GateConfig = {
     readonly eslint: EslintStepConfig | undefined;
     readonly knip: CommandStepConfig | undefined;
     readonly jscpd: CommandStepConfig | undefined;
+    readonly secrets: CommandStepConfig | undefined;
     readonly 'line-checks': LineChecksConfig | undefined;
   };
   readonly flakes: readonly string[];

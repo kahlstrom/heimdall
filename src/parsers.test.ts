@@ -7,7 +7,14 @@ import {
   runKnipJsonReporter,
   writeKnipAllIssuesFixture,
 } from '../test/helpers/knip-all-issues.js';
-import { parseEslintOutput, parseJscpdJson, parseKnipJson, parseKnipOutput, parseTypecheckOutput } from './parsers.js';
+import {
+  parseEslintOutput,
+  parseJscpdJson,
+  parseKnipJson,
+  parseKnipOutput,
+  parseSecretsOutput,
+  parseTypecheckOutput,
+} from './parsers.js';
 
 describe('parseEslintOutput', () => {
   it('parses JSON formatter output', () => {
@@ -236,6 +243,107 @@ describe('parseJscpdJson', () => {
     expect(parsed.ok).toBe(true);
     if (parsed.ok) {
       expect(parsed.value).toEqual([]);
+    }
+  });
+});
+
+const LEAKED_SECRET = 'ghp_LEAKEDSECRETVALUE_doNotPrint';
+
+describe('parseSecretsOutput', () => {
+  it('parses secretlint 14 JSON using loc.start.line and never copies message text', () => {
+    const parsed = parseSecretsOutput(
+      JSON.stringify([
+        {
+          filePath: 'src/a.ts',
+          sourceContentType: 'text',
+          messages: [
+            {
+              message: `found GitHub Token: ${LEAKED_SECRET}`,
+              range: [0, 40],
+              ruleId: '@secretlint/secretlint-rule-github',
+              loc: { start: { line: 4, column: 1 }, end: { line: 4, column: 40 } },
+              severity: 'error',
+              messageId: 'GITHUB_TOKEN',
+              data: { ID: LEAKED_SECRET },
+            },
+          ],
+        },
+      ]),
+    );
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.value).toEqual([
+        {
+          step: 'secrets',
+          file: 'src/a.ts',
+          line: 4,
+          rule: '@secretlint/secretlint-rule-github',
+          message: '',
+        },
+      ]);
+      expect(JSON.stringify(parsed.value)).not.toContain(LEAKED_SECRET);
+      expect(JSON.stringify(parsed.value)).not.toContain('found GitHub Token');
+    }
+  });
+
+  it('reads an ESLint-shaped line field when loc is absent', () => {
+    const parsed = parseSecretsOutput(
+      JSON.stringify([
+        {
+          filePath: 'src/b.ts',
+          messages: [{ line: 12, ruleId: '@secretlint/secretlint-rule-aws', message: `found secret: ${LEAKED_SECRET}` }],
+        },
+      ]),
+    );
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.value[0]?.file).toBe('src/b.ts');
+      expect(parsed.value[0]?.line).toBe(12);
+      expect(parsed.value[0]?.rule).toBe('@secretlint/secretlint-rule-aws');
+      expect(parsed.value[0]?.message).toBe('');
+    }
+  });
+
+  it('parses JSON wrapped in yarn noise', () => {
+    const parsed = parseSecretsOutput(
+      'yarn run v1.22.22\n[{"filePath":"a.ts","messages":[{"loc":{"start":{"line":1}},"ruleId":"x","message":"found secret"}]}]\nDone in 0.1s.',
+    );
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.value[0]?.file).toBe('a.ts');
+      expect(parsed.value[0]?.line).toBe(1);
+      expect(parsed.value[0]?.rule).toBe('x');
+    }
+  });
+
+  it('errors on malformed non-JSON output', () => {
+    const parsed = parseSecretsOutput('found secret: ghp_not-json');
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.error).toMatch(/not JSON/);
+    }
+  });
+
+  it('rejects a JSON object that is not a secretlint array', () => {
+    expect(parseSecretsOutput('{"filePath":"a.ts","messages":[]}').ok).toBe(false);
+  });
+
+  it('skips malformed entries and keeps valid findings', () => {
+    const parsed = parseSecretsOutput(
+      JSON.stringify([
+        null,
+        { filePath: 'a.ts' },
+        {
+          filePath: 'b.ts',
+          messages: [null, { loc: { start: { line: 2 } }, ruleId: 'keep-me', message: LEAKED_SECRET }],
+        },
+      ]),
+    );
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.value).toEqual([
+        { step: 'secrets', file: 'b.ts', line: 2, rule: 'keep-me', message: '' },
+      ]);
     }
   });
 });

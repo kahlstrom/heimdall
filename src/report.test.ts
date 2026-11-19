@@ -27,6 +27,18 @@ describe('formatFinding', () => {
     ).toBe('src/secret.ts [protected-path] this path is off-limits');
   });
 
+  it('prints secrets findings as file:line [rule] with no message text', () => {
+    expect(
+      formatFinding({
+        step: 'secrets',
+        file: 'src/a.ts',
+        line: 4,
+        rule: '@secretlint/secretlint-rule-github',
+        message: 'found GitHub Token: ghp_LEAKEDSECRETVALUE_doNotPrint',
+      }),
+    ).toBe('src/a.ts:4 [@secretlint/secretlint-rule-github]');
+  });
+
   it('prints config-uncommitted without a line number', () => {
     expect(
       formatFinding({
@@ -172,6 +184,36 @@ describe('formatReport', () => {
     expect(text.indexOf('src/a.ts:2')).toBeLessThan(text.indexOf('HEIMDALL SUMMARY'));
     expect(text).toMatch(/result:\s+RED/);
     expect(text).toMatch(/exit:\s+1/);
+  });
+
+  it('prints secrets findings as rule id plus file:line and never the secretlint message', () => {
+    const leaked = 'ghp_LEAKEDSECRETVALUE_doNotPrint';
+    const outcome: GateOutcome = {
+      kind: 'red',
+      exitCode: EXIT_RED,
+      baseRef: 'main',
+      mergeBaseSha: 'abc123def',
+      warnings: [],
+      steps: [
+        {
+          kind: 'fail',
+          name: 'secrets',
+          findings: [
+            {
+              step: 'secrets',
+              file: 'src/a.ts',
+              line: 4,
+              rule: '@secretlint/secretlint-rule-github',
+              message: `found GitHub Token: ${leaked}`,
+            },
+          ],
+        },
+      ],
+    };
+    const text = formatReport(outcome);
+    expect(text).toMatch(/^src\/a\.ts:4 \[@secretlint\/secretlint-rule-github\]$/m);
+    expect(text).not.toContain(leaked);
+    expect(text).not.toContain('found GitHub Token');
   });
 
   it('labels GATE ERROR distinctly and never as RED', () => {

@@ -19,6 +19,10 @@ export function formatFinding(finding: Finding): string {
   if (FINDINGS_WITHOUT_LINE.has(finding.rule)) {
     return `${finding.file} [${finding.rule}] ${finding.message}`;
   }
+  // Secrets findings must never print secretlint's message text or a matched value.
+  if (finding.step === 'secrets' || finding.message === '') {
+    return `${finding.file}:${finding.line} [${finding.rule}]`;
+  }
   return `${finding.file}:${finding.line} [${finding.rule}] ${finding.message}`;
 }
 
