@@ -5,7 +5,7 @@ import { formatReport } from './report.js';
 import { runGate } from './runner.js';
 import { EXIT_GATE_ERROR, EXIT_GREEN, errorMessage, type ExitCode } from './types.js';
 
-export const HELP = `Usage: heimdall [--config <path>] [--cwd <path>] [--allow-wide]
+export const HELP = `Usage: heimdall [--config <path>] [--cwd <path>] [--base <ref>] [--allow-wide]
 
 Run Heimdall, the shared quality gate, from inside a target git repo.
 
@@ -19,6 +19,7 @@ Run Heimdall, the shared quality gate, from inside a target git repo.
                     the main repo's name; tried as-is then lowercased;
                     GATE_HOME is a deprecated alias)
   --cwd <path>      repo to check (default: current directory)
+  --base <ref>      comparison base (overrides config baseRef)
   --allow-wide      continue when the diff exceeds maxChangedFiles
                     (same as HEIMDALL_ALLOW_WIDE=1)
   -h, --help        show this help
@@ -36,12 +37,53 @@ export type CliIo = {
 
 export type ParsedArgs =
   | { readonly kind: 'help' }
-  | { readonly kind: 'run'; readonly cwd?: string; readonly configPath?: string; readonly allowWide?: boolean }
+  | {
+      readonly kind: 'run';
+      readonly cwd?: string;
+      readonly configPath?: string;
+      readonly baseRef?: string;
+      readonly allowWide?: boolean;
+    }
   | { readonly kind: 'error'; readonly reason: string };
+
+type FlagValue =
+  | { readonly kind: 'miss' }
+  | { readonly kind: 'ok'; readonly value: string; readonly skip: number }
+  | { readonly kind: 'error'; readonly reason: string };
+
+/**
+ * Space-separated and `--flag=value` forms. A missing or empty value is a
+ * usage error; a token that starts with `-` is not a value.
+ */
+function readFlagValue(
+  argv: readonly string[],
+  index: number,
+  flag: string,
+  missingReason: string,
+): FlagValue {
+  const arg = argv[index];
+  if (arg === flag) {
+    const value = argv[index + 1];
+    if (!value || value.startsWith('-')) {
+      return { kind: 'error', reason: missingReason };
+    }
+    return { kind: 'ok', value, skip: 1 };
+  }
+  const prefix = `${flag}=`;
+  if (typeof arg === 'string' && arg.startsWith(prefix)) {
+    const value = arg.slice(prefix.length);
+    if (!value) {
+      return { kind: 'error', reason: missingReason };
+    }
+    return { kind: 'ok', value, skip: 0 };
+  }
+  return { kind: 'miss' };
+}
 
 export function parseArgs(argv: readonly string[]): ParsedArgs {
   let cwd: string | undefined;
   let configPath: string | undefined;
+  let baseRef: string | undefined;
   let allowWide = false;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -52,48 +94,50 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
       allowWide = true;
       continue;
     }
-    if (arg === '--cwd') {
-      const value = argv[index + 1];
-      if (!value || value.startsWith('-')) {
-        return { kind: 'error', reason: '--cwd requires a path' };
-      }
-      cwd = value;
-      index += 1;
+    const cwdValue = readFlagValue(argv, index, '--cwd', '--cwd requires a path');
+    if (cwdValue.kind === 'error') {
+      return cwdValue;
+    }
+    if (cwdValue.kind === 'ok') {
+      cwd = cwdValue.value;
+      index += cwdValue.skip;
       continue;
     }
-    if (arg?.startsWith('--cwd=')) {
-      const value = arg.slice('--cwd='.length);
-      if (!value) {
-        return { kind: 'error', reason: '--cwd requires a path' };
-      }
-      cwd = value;
+    const configValue = readFlagValue(argv, index, '--config', '--config requires a path');
+    if (configValue.kind === 'error') {
+      return configValue;
+    }
+    if (configValue.kind === 'ok') {
+      configPath = configValue.value;
+      index += configValue.skip;
       continue;
     }
-    if (arg === '--config') {
-      const value = argv[index + 1];
-      if (!value || value.startsWith('-')) {
-        return { kind: 'error', reason: '--config requires a path' };
-      }
-      configPath = value;
-      index += 1;
-      continue;
+    const baseValue = readFlagValue(argv, index, '--base', '--base requires a ref');
+    if (baseValue.kind === 'error') {
+      return baseValue;
     }
-    if (arg?.startsWith('--config=')) {
-      const value = arg.slice('--config='.length);
-      if (!value) {
-        return { kind: 'error', reason: '--config requires a path' };
-      }
-      configPath = value;
+    if (baseValue.kind === 'ok') {
+      baseRef = baseValue.value;
+      index += baseValue.skip;
       continue;
     }
     return { kind: 'error', reason: `unknown argument: ${arg}` };
   }
-  const run: { kind: 'run'; cwd?: string; configPath?: string; allowWide?: boolean } = { kind: 'run' };
+  const run: {
+    kind: 'run';
+    cwd?: string;
+    configPath?: string;
+    baseRef?: string;
+    allowWide?: boolean;
+  } = { kind: 'run' };
   if (cwd !== undefined) {
     run.cwd = cwd;
   }
   if (configPath !== undefined) {
     run.configPath = configPath;
+  }
+  if (baseRef !== undefined) {
+    run.baseRef = baseRef;
   }
   if (allowWide) {
     run.allowWide = true;
@@ -120,6 +164,7 @@ export async function main(
     const outcome = await runGate({
       cwd: args.cwd ?? defaultCwd,
       ...(args.configPath !== undefined ? { configPath: args.configPath } : {}),
+      ...(args.baseRef !== undefined ? { baseRef: args.baseRef } : {}),
       ...(args.allowWide === true ? { allowWide: true } : {}),
       ...(abortSignal !== undefined ? { abortSignal } : {}),
       log: (text) => io.stdout.write(text),

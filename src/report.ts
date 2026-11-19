@@ -2,6 +2,7 @@
  * Human-facing report. Findings are concise and actionable; the summary block
  * is last so a log tail still shows the verdict.
  */
+import type { BaseRefSource } from './git.js';
 import {
   EXIT_GATE_ERROR,
   EXIT_GREEN,
@@ -62,12 +63,32 @@ function collectFindings(outcome: GateOutcome): readonly Finding[] {
   return fromSteps;
 }
 
+function baseSourceLabel(source: BaseRefSource): string {
+  switch (source) {
+    case 'cli':
+      return '(from --base)';
+    case 'config':
+      return '(from config)';
+    case 'upstream':
+      return '(from upstream)';
+    case 'fallback':
+      return '(fallback)';
+    default:
+      return assertNever(source, 'unhandled base source');
+  }
+}
+
 /**
  * Printed at the start of every run, before setup and steps.
  * Merge-base is the short sha; the summary still prints the full commit.
  */
-export function formatRunPrelude(baseRef: string, mergeBaseSha: string, changedFileCount: number): string {
-  return `base: ${baseRef}\nmerge-base: ${mergeBaseSha.slice(0, 7)}\nchanged files: ${changedFileCount}\n`;
+export function formatRunPrelude(
+  baseRef: string,
+  mergeBaseSha: string,
+  changedFileCount: number,
+  source: BaseRefSource,
+): string {
+  return `base: ${baseRef} ${baseSourceLabel(source)}\nmerge-base: ${mergeBaseSha.slice(0, 7)}\nchanged files: ${changedFileCount}\n`;
 }
 
 /**

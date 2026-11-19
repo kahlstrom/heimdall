@@ -188,12 +188,13 @@ Rules for this step:
 - **Ask whether the tests need setup or teardown**, such as starting a test
   database. Put those commands in `setup` and `teardown`. Setup failure is a
   GATE ERROR; teardown always runs.
-- **Ask about the base branch.** By default Heimdall compares against the
-  branch's upstream when it tracks a different branch, otherwise `main`, then
-  `origin/main`. If the repo's default branch has another name, set
-  `baseRef` (for example `"origin/master"`). If the user works in short
-  story branches off a feature branch and never wants a silent fallback to
-  `main`, set `"requireParentBase": true`.
+- **Ask about the base branch.** By default Heimdall compares against
+  `--base` if given, then config `baseRef`, then the branch's upstream when
+  it tracks a different branch, otherwise `main`, then `origin/main`. If the
+  repo's default branch has another name, pass `--base` or set `baseRef`
+  (for example `"origin/master"`). If the user works in short story branches
+  off a feature branch and never wants a silent fallback to `main`, set
+  `"requireParentBase": true`.
 - Leave `maxChangedFiles` at its default (`100`) unless the user asks.
 - Leave `flakes` empty. Only add an entry with the user's explicit OK, as
   `"file > full test title"`.

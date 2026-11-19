@@ -66,6 +66,8 @@ export type RunGateOptions = {
   readonly abortSignal?: AbortSignal;
   /** CLI `--allow-wide`: skip the maxChangedFiles GATE ERROR. */
   readonly allowWide?: boolean;
+  /** CLI `--base`: comparison base, wins over config `baseRef`. */
+  readonly baseRef?: string;
   /** Start-of-run lines. The CLI writes these to stdout before steps run. */
   readonly log?: (text: string) => void;
 };
@@ -351,9 +353,12 @@ export async function runGate(options: RunGateOptions): Promise<GateOutcome> {
   }
   const config = loaded.value;
 
-  const base = resolveBaseRef(repoRoot, config.baseRef);
+  const base = resolveBaseRef(repoRoot, config.baseRef, options.baseRef);
   if (!base.ok) {
-    return withConfigPath(gateError(base.error, config.baseRef, [], undefined, deprecations), configPath);
+    return withConfigPath(
+      gateError(base.error, options.baseRef ?? config.baseRef, [], undefined, deprecations),
+      configPath,
+    );
   }
 
   const scope = loadDiffScope(repoRoot, base.value);
@@ -365,11 +370,11 @@ export async function runGate(options: RunGateOptions): Promise<GateOutcome> {
   }
 
   const log = options.log ?? (() => undefined);
-  log(formatRunPrelude(base.value.spec, base.value.mergeBaseSha, scope.value.changedFiles.size));
+  log(formatRunPrelude(base.value.spec, base.value.mergeBaseSha, scope.value.changedFiles.size, base.value.source));
 
   const parentError = parentBaseError({
     requireParentBase: config.requireParentBase,
-    configuredBaseRef: config.baseRef,
+    configuredBaseRef: options.baseRef ?? config.baseRef,
     resolvedSpec: base.value.spec,
     hasUpstream: hasConfiguredUpstream(repoRoot),
   });

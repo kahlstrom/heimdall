@@ -170,7 +170,7 @@ defaults below are exactly what `src/config.ts` accepts.
 
 | Key | Type | Default | Example |
 | --- | --- | --- | --- |
-| `baseRef` | string (non-empty when set) | unset: this branch's tracked upstream **only when that upstream is a different branch**, otherwise `main`, then `origin/main`. A branch that tracks its own remote (`origin/<same name>`) is never used as the base, so a push cannot shrink the diff to unpushed commits. An explicit `baseRef` that does not resolve is a GATE ERROR (no silent fallback). | `"origin/main"` |
+| `baseRef` | string (non-empty when set) | `--base` if given, else this value if set, else this branch's tracked upstream **only when that upstream is a different branch**, otherwise `main`, then `origin/main`. A branch that tracks its own remote (`origin/<same name>`) is never used as the base, so a push cannot shrink the diff to unpushed commits. An explicit `--base` or `baseRef` that does not resolve is a GATE ERROR (no silent fallback). | `"origin/main"` |
 | `requireParentBase` | boolean | `false` | `true` |
 | `maxChangedFiles` | positive integer | `100` | `50` |
 | `steps` | object | `{}` | see below |
@@ -179,12 +179,12 @@ defaults below are exactly what `src/config.ts` accepts.
 | `teardown` | array of non-empty strings | `[]` | `["docker compose down"]` |
 | `protectedPaths` | array of non-empty glob strings | `[]` (check off) | `["src/generated/**", "vendor/**"]` |
 
-`requireParentBase`: when `true` and `baseRef` is not set, a resolved base of
-`main` or `origin/main`, or no upstream at all, is a **GATE ERROR** (exit 2)
-before setup or steps. The message says the base resolved to main (or that no
-upstream is set) and tells you to point the branch at its feature parent, for
-example `git branch --set-upstream-to=origin/FEATURE`. Repos that branch off
-main on purpose leave this off.
+`requireParentBase`: when `true` and neither `--base` nor `baseRef` is set, a
+resolved base of `main` or `origin/main`, or no upstream at all, is a **GATE
+ERROR** (exit 2) before setup or steps. The message says the base resolved to
+main (or that no upstream is set) and tells you to point the branch at its
+feature parent, for example `git branch --set-upstream-to=origin/FEATURE`.
+Repos that branch off main on purpose leave this off.
 
 `maxChangedFiles`: after the diff is computed (including untracked files
 Heimdall counts), a count above this limit is a **GATE ERROR** naming the
@@ -201,7 +201,8 @@ attempted. Setup/teardown use the same default timeout as steps (`300000` ms).
 
 At least one step must be enabled.
 
-Every run prints the resolved **base**, the merge-base **short sha**, and the
+Every run prints the resolved **base** and where it came from (`--base`,
+config, upstream, or fallback), the merge-base **short sha**, and the
 **changed-file count** before setup and steps. The final `HEIMDALL SUMMARY`
 still includes the `base:` line.
 
@@ -334,13 +335,14 @@ instead of a surprise RED.
 ## CLI flags
 
 ```text
-heimdall [--config <path>] [--cwd <path>] [--allow-wide]
+heimdall [--config <path>] [--cwd <path>] [--base <ref>] [--allow-wide]
 ```
 
 | Flag | Meaning |
 | --- | --- |
 | `--config <path>` | Use this config file only. Relative paths resolve from `--cwd` / the current directory. |
 | `--cwd <path>` | Repo to check (default: current directory). Heimdall finds the git root from here. |
+| `--base <ref>` | Comparison base. Overrides config `baseRef`. A ref that does not resolve is a GATE ERROR. |
 | `--allow-wide` | Continue when the diff exceeds `maxChangedFiles` (same as `HEIMDALL_ALLOW_WIDE=1`). |
 | `-h`, `--help` | Print help and exit 0. |
 
@@ -411,7 +413,7 @@ in `$HEIMDALL_TMP/knip-base` (no stash) and runs the same knip command there.
 ## Sample output
 
 ```text
-base: main
+base: main (fallback)
 merge-base: a1b2c3d
 changed files: 3
 

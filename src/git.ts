@@ -475,10 +475,14 @@ export async function materializeCommit(
   }
 }
 
+/** Why the comparison base was chosen. Printed on the opening `base:` line. */
+export type BaseRefSource = 'cli' | 'config' | 'upstream' | 'fallback';
+
 export type ResolvedBaseRef = {
   readonly spec: string;
   readonly sha: string;
   readonly mergeBaseSha: string;
+  readonly source: BaseRefSource;
 };
 
 function verifyRef(cwd: string, spec: string): Result<string> {
@@ -584,13 +588,30 @@ function fallbackMain(cwd: string): Result<{ spec: string; sha: string }> {
   );
 }
 
+function explicitBase(
+  cwd: string,
+  spec: string,
+  unresolvedLabel: string,
+): Result<{ spec: string; sha: string }> {
+  const verified = verifyRef(cwd, spec);
+  if (!verified.ok) {
+    return err(`${unresolvedLabel} ${JSON.stringify(spec)} could not be resolved: ${verified.error}`);
+  }
+  return ok({ spec, sha: verified.value });
+}
+
 /**
- * Resolve the comparison base: explicit config, else this branch's tracked
- * parent when that parent is a different branch, else main, else origin/main.
- * Tracking origin/<same-name> is ignored so a push cannot shrink the diff
- * to unpushed commits. An explicit baseRef that does not resolve is a GATE ERROR.
+ * Resolve the comparison base: CLI `--base`, else explicit config, else this
+ * branch's tracked parent when that parent is a different branch, else main,
+ * else origin/main. Tracking origin/<same-name> is ignored so a push cannot
+ * shrink the diff to unpushed commits. An explicit `--base` or baseRef that
+ * does not resolve is a GATE ERROR.
  */
-export function resolveBaseRef(cwd: string, configured: string | undefined): Result<ResolvedBaseRef> {
+export function resolveBaseRef(
+  cwd: string,
+  configured: string | undefined,
+  cliBase?: string,
+): Result<ResolvedBaseRef> {
   const head = verifyRef(cwd, 'HEAD');
   if (!head.ok) {
     return err(`cannot resolve HEAD: ${head.error}`);
@@ -598,13 +619,23 @@ export function resolveBaseRef(cwd: string, configured: string | undefined): Res
 
   let spec: string;
   let sha: string;
-  if (configured) {
-    const verified = verifyRef(cwd, configured);
-    if (!verified.ok) {
-      return err(`configured baseRef ${JSON.stringify(configured)} could not be resolved: ${verified.error}`);
+  let source: BaseRefSource;
+  if (cliBase) {
+    const resolved = explicitBase(cwd, cliBase, '--base');
+    if (!resolved.ok) {
+      return err(resolved.error);
     }
-    spec = configured;
-    sha = verified.value;
+    spec = resolved.value.spec;
+    sha = resolved.value.sha;
+    source = 'cli';
+  } else if (configured) {
+    const resolved = explicitBase(cwd, configured, 'configured baseRef');
+    if (!resolved.ok) {
+      return err(resolved.error);
+    }
+    spec = resolved.value.spec;
+    sha = resolved.value.sha;
+    source = 'config';
   } else {
     const parent = parentFromUpstream(cwd, currentBranchName(cwd));
     const resolved = parent ? ok(parent) : fallbackMain(cwd);
@@ -613,6 +644,7 @@ export function resolveBaseRef(cwd: string, configured: string | undefined): Res
     }
     spec = resolved.value.spec;
     sha = resolved.value.sha;
+    source = parent ? 'upstream' : 'fallback';
   }
 
   const mergeBase = runGit(['merge-base', sha, head.value], cwd);
@@ -623,5 +655,6 @@ export function resolveBaseRef(cwd: string, configured: string | undefined): Res
     spec,
     sha,
     mergeBaseSha: mergeBase.value.trim(),
+    source,
   });
 }

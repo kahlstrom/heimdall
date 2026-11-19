@@ -41,9 +41,20 @@ describe('formatFinding', () => {
 });
 
 describe('formatRunPrelude', () => {
-  it('prints base, short merge-base, and changed-file count on separate lines', () => {
-    const text = formatRunPrelude('feat/gate-v1', '0123456789abcdef0123456789abcdef01234567', 12);
-    expect(text).toBe('base: feat/gate-v1\nmerge-base: 0123456\nchanged files: 12\n');
+  it('prints base, source, short merge-base, and changed-file count on separate lines', () => {
+    const sha = '0123456789abcdef0123456789abcdef01234567';
+    expect(formatRunPrelude('feat/x', sha, 12, 'cli')).toBe(
+      'base: feat/x (from --base)\nmerge-base: 0123456\nchanged files: 12\n',
+    );
+    expect(formatRunPrelude('main', sha, 3, 'config')).toBe(
+      'base: main (from config)\nmerge-base: 0123456\nchanged files: 3\n',
+    );
+    expect(formatRunPrelude('feat/gate-v1', sha, 12, 'upstream')).toBe(
+      'base: feat/gate-v1 (from upstream)\nmerge-base: 0123456\nchanged files: 12\n',
+    );
+    expect(formatRunPrelude('origin/main', sha, 0, 'fallback')).toBe(
+      'base: origin/main (fallback)\nmerge-base: 0123456\nchanged files: 0\n',
+    );
   });
 });
 

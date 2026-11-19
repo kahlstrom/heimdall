@@ -465,6 +465,7 @@ describe('loadDiffScope', () => {
         spec: 'main',
         sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         mergeBaseSha: 'not-a-real-sha',
+        source: 'config',
       });
       expect(scope.ok).toBe(false);
       if (!scope.ok) {

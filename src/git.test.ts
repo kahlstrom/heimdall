@@ -182,6 +182,14 @@ describe('resolveBaseRef', () => {
       expect(resolved.ok).toBe(true);
       if (resolved.ok) {
         expect(resolved.value.spec).toBe('main');
+        expect(resolved.value.source).toBe('config');
+      }
+      git(repo, ['branch', '--set-upstream-to=main']);
+      const fromCli = resolveBaseRef(repo, 'main', 'feat');
+      expect(fromCli.ok).toBe(true);
+      if (fromCli.ok) {
+        expect(fromCli.value.spec).toBe('feat');
+        expect(fromCli.value.source).toBe('cli');
       }
     });
   });
@@ -194,6 +202,12 @@ describe('resolveBaseRef', () => {
       expect(resolved.ok).toBe(false);
       if (!resolved.ok) {
         expect(resolved.error).toMatch(/baseRef/);
+      }
+      const cli = resolveBaseRef(repo, 'main', 'no-such-base');
+      expect(cli.ok).toBe(false);
+      if (!cli.ok) {
+        expect(cli.error).toMatch(/--base/);
+        expect(cli.error).toMatch(/no-such-base/);
       }
     });
   });

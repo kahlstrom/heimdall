@@ -1122,6 +1122,84 @@ describe('runGate base guard', () => {
     });
   });
 
+  it('skips the parent-base guard when --base is set', async () => {
+    await withTempRepo(async (repo) => {
+      writeGateConfig(repo, PARENT_BASE_CONFIG);
+      commitAll(repo, 'initial');
+      git(repo, ['checkout', '-q', '-b', 'feat']);
+      writeRepoFile(repo, 'src/a.ts', 'export const a = 1;\n');
+      commitAll(repo, 'feat');
+      trackOwnRemote(repo);
+      const outcome = await runGate({ cwd: repo, baseRef: 'main', ...mockPass() });
+      expect(outcome.kind).toBe('green');
+      expect(outcome.baseRef).toBe('main');
+    });
+  });
+
+  it('uses --base ahead of a configured baseRef', async () => {
+    await withTempRepo(async (repo) => {
+      writeGateConfig(repo, {
+        baseRef: 'main',
+        steps: { tests: { command: 'npm test' } },
+      });
+      commitAll(repo, 'initial');
+      git(repo, ['checkout', '-q', '-b', 'feat']);
+      writeRepoFile(repo, 'src/feat.ts', 'export const f = 1;\n');
+      commitAll(repo, 'feat');
+      git(repo, ['checkout', '-q', '-b', 'story']);
+      writeRepoFile(repo, 'src/story.ts', 'export const s = 1;\n');
+      commitAll(repo, 'story');
+      const logs: string[] = [];
+      const outcome = await runGate({
+        cwd: repo,
+        baseRef: 'feat',
+        log: (text) => logs.push(text),
+        ...mockPass(),
+      });
+      expect(outcome.kind).toBe('green');
+      expect(outcome.baseRef).toBe('feat');
+      expect(logs.join('')).toContain('base: feat (from --base)\n');
+    });
+  });
+
+  it('is a GATE ERROR when --base does not resolve', async () => {
+    await withTempRepo(async (repo) => {
+      writeGateConfig(repo, {
+        baseRef: 'main',
+        steps: { tests: { command: 'npm test' } },
+      });
+      commitAll(repo, 'initial');
+      const outcome = await runGate({ cwd: repo, baseRef: 'does-not-exist', ...mockPass() });
+      expect(outcome.kind).toBe('error');
+      expect(outcome.exitCode).toBe(2);
+      if (outcome.kind === 'error') {
+        expect(outcome.reason).toMatch(/--base/);
+        expect(outcome.reason).toMatch(/does-not-exist/);
+      }
+    });
+  });
+
+  it('prints where the resolved base came from', async () => {
+    await withTempRepo(async (repo) => {
+      writeGateConfig(repo, {
+        baseRef: 'main',
+        steps: { tests: { command: 'npm test' } },
+      });
+      commitAll(repo, 'initial');
+      git(repo, ['checkout', '-q', '-b', 'feat']);
+      writeRepoFile(repo, 'src/a.ts', 'export const a = 1;\n');
+      commitAll(repo, 'feat');
+      const logs: string[] = [];
+      const outcome = await runGate({
+        cwd: repo,
+        log: (text) => logs.push(text),
+        ...mockPass(),
+      });
+      expect(outcome.kind).toBe('green');
+      expect(logs.join('')).toContain('base: main (from config)\n');
+    });
+  });
+
   it('is a GATE ERROR when the changed-file count is above maxChangedFiles', async () => {
     await withTempRepo(async (repo) => {
       writeGateConfig(repo, {
@@ -1248,7 +1326,7 @@ describe('runGate base guard', () => {
       expect(events.slice(0, firstCmd).every((event) => event.startsWith('log:'))).toBe(true);
       expect(events.slice(firstCmd)).toEqual(['cmd:echo up', 'cmd:npm test']);
       const prelude = events.slice(0, firstCmd).join('');
-      expect(prelude).toContain('base: main\n');
+      expect(prelude).toContain('base: main (fallback)\n');
       expect(prelude).toContain(`merge-base: ${mergeBase.slice(0, 7)}\n`);
       expect(prelude).toContain('changed files: 1\n');
     });

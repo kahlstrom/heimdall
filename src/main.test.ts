@@ -29,6 +29,20 @@ describe('parseArgs', () => {
     });
   });
 
+  it('parses --base and --base=', () => {
+    expect(parseArgs(['--base', 'feat/x'])).toEqual({ kind: 'run', baseRef: 'feat/x' });
+    expect(parseArgs(['--base=origin/main'])).toEqual({ kind: 'run', baseRef: 'origin/main' });
+  });
+
+  it('requires a value for --base', () => {
+    expect(parseArgs(['--base'])).toEqual({ kind: 'error', reason: '--base requires a ref' });
+    expect(parseArgs(['--base='])).toEqual({ kind: 'error', reason: '--base requires a ref' });
+    expect(parseArgs(['--base', '--allow-wide'])).toEqual({
+      kind: 'error',
+      reason: '--base requires a ref',
+    });
+  });
+
   it('returns help', () => {
     expect(parseArgs(['--help']).kind).toBe('help');
   });
@@ -83,7 +97,7 @@ describe('main', () => {
       );
       commitAll(repo, 'init');
       const stdout: string[] = [];
-      const code = await main([], repo, {
+      const code = await main(['--base', 'main'], repo, {
         stdout: { write(text) { stdout.push(text); } },
         stderr: { write() {} },
       });
@@ -93,7 +107,7 @@ describe('main', () => {
       expect(text.indexOf('base:')).toBeLessThan(text.indexOf('HEIMDALL SUMMARY'));
       expect(text.indexOf('merge-base:')).toBeLessThan(text.indexOf('HEIMDALL SUMMARY'));
       expect(text.indexOf('changed files:')).toBeLessThan(text.indexOf('HEIMDALL SUMMARY'));
-      expect(text).toMatch(/base:\s+main/);
+      expect(text).toMatch(/base:\s+main \(from --base\)/);
       expect(text).toMatch(/GREEN/);
     });
   });
