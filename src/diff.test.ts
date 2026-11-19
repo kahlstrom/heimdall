@@ -8,6 +8,7 @@ import {
   filterFindingsToScope,
   findingsNotInBase,
   loadDiffScope,
+  mapArchitectureRenameMessage,
   matchFindingKey,
   parseChangedNewLines,
   stableEslintMessage,
@@ -193,29 +194,37 @@ describe('findingsNotInBase', () => {
     rule,
     message,
   });
+  const identityScope: DiffScope = {
+    baseRef: 'main',
+    mergeBaseSha: 'aaa',
+    changedFiles: new Set(),
+    addedLines: new Map(),
+    renamedFrom: new Map(),
+  };
+  const keyOf = (finding: Finding): string => matchFindingKey(finding, identityScope, SCOPE_ROOT);
 
   it('keeps a finding that is not in the base set, even on the same line', () => {
     const current = [hit('src/lib.ts', 'exports', 'helper', 4)];
     const base: Finding[] = [];
-    expect(findingsNotInBase(current, base)).toEqual(current);
+    expect(findingsNotInBase(current, base, keyOf)).toEqual(current);
   });
 
   it('drops a finding that already existed at the base, ignoring line drift', () => {
     const current = [hit('src/legacy.ts', 'exports', 'leftover', 12)];
     const base = [hit('src/legacy.ts', 'exports', 'leftover', 1)];
-    expect(findingsNotInBase(current, base)).toEqual([]);
+    expect(findingsNotInBase(current, base, keyOf)).toEqual([]);
   });
 
   it('keeps a second identical finding when the base only has one', () => {
     const current = [hit('src/a.ts', 'no-unused-vars', 'x', 4), hit('src/a.ts', 'no-unused-vars', 'x', 10)];
     const base = [hit('src/a.ts', 'no-unused-vars', 'x', 4)];
-    expect(findingsNotInBase(current, base)).toEqual([current[1]]);
+    expect(findingsNotInBase(current, base, keyOf)).toEqual([current[1]]);
   });
 
   it('drops two identical findings when the base has both', () => {
     const current = [hit('src/a.ts', 'no-unused-vars', 'x', 4), hit('src/a.ts', 'no-unused-vars', 'x', 10)];
     const base = [hit('src/a.ts', 'no-unused-vars', 'x', 1), hit('src/a.ts', 'no-unused-vars', 'x', 2)];
-    expect(findingsNotInBase(current, base)).toEqual([]);
+    expect(findingsNotInBase(current, base, keyOf)).toEqual([]);
   });
 
   const renamedScope: DiffScope = {
@@ -229,31 +238,44 @@ describe('findingsNotInBase', () => {
   it('matches a finding in a renamed file under the old path', () => {
     const current = [hit('src/new.ts', 'exports', 'helper', 1)];
     const base = [hit('src/old.ts', 'exports', 'helper', 1)];
-    const keyOf = (finding: Finding): string => matchFindingKey(finding, renamedScope, SCOPE_ROOT);
-    expect(findingsNotInBase(current, base, keyOf)).toEqual([]);
+    const renamedKeyOf = (finding: Finding): string => matchFindingKey(finding, renamedScope, SCOPE_ROOT);
+    expect(findingsNotInBase(current, base, renamedKeyOf)).toEqual([]);
   });
 
-  it('rewrites renamed paths inside architecture messages', () => {
-    const current: Finding[] = [
-      {
-        step: 'architecture',
-        file: 'src/new.ts',
-        line: 0,
-        rule: 'not-to-unallowed',
-        message: 'src/new.ts -> src/forbidden.ts',
-      },
-    ];
-    const base: Finding[] = [
-      {
-        step: 'architecture',
-        file: 'src/old.ts',
-        line: 0,
-        rule: 'not-to-unallowed',
-        message: 'src/old.ts -> src/forbidden.ts',
-      },
-    ];
-    const keyOf = (finding: Finding): string => matchFindingKey(finding, renamedScope, SCOPE_ROOT);
-    expect(findingsNotInBase(current, base, keyOf)).toEqual([]);
+  function architectureHit(file: string, message: string): Finding {
+    return { step: 'architecture', file, line: 0, rule: 'not-to-unallowed', message };
+  }
+
+  function architectureKeyOf(scope: DiffScope): (finding: Finding) => string {
+    return (finding) =>
+      matchFindingKey(finding, scope, SCOPE_ROOT, (message) =>
+        mapArchitectureRenameMessage(message, scope.renamedFrom),
+      );
+  }
+
+  it('maps architecture from -> to path segments through a git rename', () => {
+    const current = [architectureHit('src/new.ts', 'src/new.ts -> src/forbidden.ts')];
+    const base = [architectureHit('src/old.ts', 'src/old.ts -> src/forbidden.ts')];
+    expect(findingsNotInBase(current, base, architectureKeyOf(renamedScope))).toEqual([]);
+  });
+
+  const nestedRenameScope: DiffScope = {
+    ...identityScope,
+    changedFiles: new Set(['packages/core/src/x.ts', 'src/x.ts']),
+    addedLines: new Map([['src/x.ts', new Set()]]),
+    renamedFrom: new Map([['src/x.ts', 'packages/core/src/x.ts']]),
+  };
+
+  it('matches a nested-path rename whose old path contains the new path', () => {
+    const current = [architectureHit('src/x.ts', 'src/x.ts -> src/forbidden.ts')];
+    const base = [architectureHit('packages/core/src/x.ts', 'packages/core/src/x.ts -> src/forbidden.ts')];
+    expect(findingsNotInBase(current, base, architectureKeyOf(nestedRenameScope))).toEqual([]);
+  });
+
+  it('does not rewrite an architecture path that only contains the new path', () => {
+    const current = [architectureHit('packages/app/src/x.ts', 'packages/app/src/x.ts -> src/forbidden.ts')];
+    const base = [architectureHit('packages/app/src/x.ts', 'packages/app/src/x.ts -> src/forbidden.ts')];
+    expect(findingsNotInBase(current, base, architectureKeyOf(nestedRenameScope))).toEqual([]);
   });
 });
 

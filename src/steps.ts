@@ -7,6 +7,7 @@ import { classifyCommandFailure, combinedOutput, type RunCommandFn } from './com
 import {
   filterFindingsToScope,
   findingsNotInBase,
+  mapArchitectureRenameMessage,
   matchFindingKey,
   partitionFindingsByScope,
   relativizeFindingFiles,
@@ -405,6 +406,7 @@ export const eslintStep: GateStep = {
 function newVsBaseCommandStep(
   name: CommandStepName,
   parse: (output: string) => Result<Finding[]>,
+  messageOf: (message: string, renamedFrom: ReadonlyMap<string, string>) => string,
 ): GateStep {
   return {
     name,
@@ -426,7 +428,11 @@ function newVsBaseCommandStep(
       if (isStepResult(baseFindings)) {
         return baseFindings;
       }
-      const keyOf = (finding: Finding): string => matchFindingKey(finding, ctx.scope, ctx.cwd);
+      const currentFindings = new Set(ran.findings);
+      const keyOf = (finding: Finding): string =>
+        matchFindingKey(finding, ctx.scope, ctx.cwd, (message) =>
+          currentFindings.has(finding) ? messageOf(message, ctx.scope.renamedFrom) : message,
+        );
       const findings = findingsNotInBase(ran.findings, baseFindings, keyOf);
       if (findings.length === 0) {
         return { kind: 'pass', name };
@@ -436,7 +442,7 @@ function newVsBaseCommandStep(
   };
 }
 
-export const knipStep: GateStep = newVsBaseCommandStep('knip', parseKnipOutput);
+export const knipStep: GateStep = newVsBaseCommandStep('knip', parseKnipOutput, (message) => message);
 
 /**
  * Materialize the merge-base under HEIMDALL_TMP (itself under os.tmpdir), run
@@ -454,7 +460,7 @@ export async function findingsAtMergeBase<T>(
   stepName: CommandStepName,
   command: string,
   parse: (output: string) => Result<T>,
-  mapParsed: (value: T, baseRoot: string) => T = (value) => value,
+  mapParsed: (value: T, baseRoot: string) => T,
 ): Promise<T | StepResult> {
   const dest = path.join(ctx.tmpDir, `${stepName}-base`);
   try {
@@ -662,7 +668,11 @@ export const jscpdStep: GateStep = jsonToolStep('jscpd', parseJscpdOutput, 'jscp
  * repo enables it with a command — no default command, rules file, or tool
  * path. Skip the baseline run when the branch has no error violations.
  */
-export const architectureStep: GateStep = newVsBaseCommandStep('architecture', parseArchitectureOutput);
+export const architectureStep: GateStep = newVsBaseCommandStep(
+  'architecture',
+  parseArchitectureOutput,
+  mapArchitectureRenameMessage,
+);
 
 /** Parser message plus exit code; never tool stdout or stderr. */
 function secretsParseFailure(error: string, result: CommandResult): string {

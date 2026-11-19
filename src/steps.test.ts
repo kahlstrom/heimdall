@@ -16,7 +16,7 @@ import {
   typecheckStep,
   type StepContext,
 } from './steps.js';
-import { loadDiffScope } from './diff.js';
+import { loadDiffScope, relativizeFindingFiles } from './diff.js';
 import { resolveBaseRef } from './git.js';
 import { formatFinding } from './report.js';
 import { err, ok, type DiffScope, type Finding, type GateConfig, type Result } from './types.js';
@@ -2065,6 +2065,7 @@ describe('findingsAtMergeBase', () => {
           'jscpd',
           'fake-jscpd',
           parseFakeTsv,
+          relativizeFindingFiles,
         );
         expect(parsed).toEqual([{ step: 'jscpd', file: 'src/a.ts', line: 1, rule: 'duplicate', message: 'clone' }]);
         expect(fs.existsSync(dest)).toBe(false);
@@ -2092,6 +2093,7 @@ describe('findingsAtMergeBase', () => {
           'jscpd',
           'fake-jscpd',
           parseFakeTsv,
+          relativizeFindingFiles,
         );
         expect(Array.isArray(step)).toBe(false);
         if (!Array.isArray(step)) {
@@ -2125,6 +2127,7 @@ describe('findingsAtMergeBase', () => {
           'jscpd',
           'fake-jscpd',
           parseFakeTsv,
+          relativizeFindingFiles,
         );
         expect(Array.isArray(step)).toBe(false);
         if (!Array.isArray(step)) {
@@ -2211,6 +2214,7 @@ describe('findingsAtMergeBase', () => {
           'jscpd',
           'fake-jscpd',
           parseFakeTsv,
+          relativizeFindingFiles,
         );
         expect(sawBaseCopy).toBe(true);
         expect(parsed).toEqual([{ step: 'jscpd', file: 'src/a.ts', line: 1, rule: 'duplicate', message: 'clone' }]);

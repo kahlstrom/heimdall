@@ -449,21 +449,6 @@ export function matchFindingFile(finding: Finding, scope: DiffScope, repoRoot: s
 }
 
 /**
- * Longest new path first so `src/a2.ts` is not rewritten as a prefix of `src/a.ts`.
- */
-function rewriteRenamedPaths(text: string, renamedFrom: ReadonlyMap<string, string>): string {
-  if (renamedFrom.size === 0) {
-    return text;
-  }
-  const pairs = [...renamedFrom.entries()].sort((left, right) => right[0].length - left[0].length);
-  let result = text;
-  for (const [from, to] of pairs) {
-    result = result.split(from).join(to);
-  }
-  return result;
-}
-
-/**
  * Digit runs that are not part of an identifier, so `foo2` stays distinct from
  * `foo3` while `on line 4 column 10` and `complexity of 15` collapse.
  */
@@ -472,11 +457,29 @@ export function stableEslintMessage(message: string): string {
 }
 
 /**
+ * Map each ` -> ` path in an architecture finding message onto the merge-base
+ * path when that segment is exactly a rename destination. Other segments stay
+ * as written, including paths that merely contain a destination. Base messages
+ * already use old paths, which are not destinations, so they pass through.
+ */
+export function mapArchitectureRenameMessage(
+  message: string,
+  renamedFrom: ReadonlyMap<string, string>,
+): string {
+  if (renamedFrom.size === 0) {
+    return message;
+  }
+  return message
+    .split(' -> ')
+    .map((segment) => renamedFrom.get(segment) ?? segment)
+    .join(' -> ');
+}
+
+/**
  * Identity for new-vs-base comparison. Line is omitted so an unused helper
  * left on an unchanged line still matches the same symbol at HEAD. File is
  * repo-relative and mapped through git rename. `messageOf` stabilizes tool
- * wording (ESLint digit runs); paths inside the message follow the same rename
- * map so architecture `from -> to` edges still match.
+ * wording (ESLint digit runs).
  */
 export function matchFindingKey(
   finding: Finding,
@@ -485,7 +488,7 @@ export function matchFindingKey(
   messageOf: (message: string) => string = (message) => message,
 ): string {
   const file = matchFindingFile(finding, scope, repoRoot);
-  const message = messageOf(rewriteRenamedPaths(finding.message, scope.renamedFrom));
+  const message = messageOf(finding.message);
   return `${finding.step}\0${file}\0${finding.rule}\0${finding.messageId ?? ''}\0${message}`;
 }
 
@@ -496,8 +499,7 @@ export function matchFindingKey(
 export function findingsNotInBase(
   current: readonly Finding[],
   base: readonly Finding[],
-  keyOf: (finding: Finding) => string = (finding) =>
-    `${finding.step}\0${finding.file}\0${finding.rule}\0${finding.message}`,
+  keyOf: (finding: Finding) => string,
 ): Finding[] {
   const remaining = new Map<string, number>();
   for (const finding of base) {
