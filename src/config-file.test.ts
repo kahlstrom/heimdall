@@ -44,7 +44,7 @@ function withLookupDirs(
 }
 
 function unusedLookup(): Result<string> {
-  throw new Error('config lookup name is not used when --config is given');
+  throw new Error('config lookup name must not be called');
 }
 
 describe('loadGateConfigFile', () => {
@@ -182,9 +182,16 @@ describe('resolveConfigPath', () => {
     });
   });
 
-  it('returns the name provider error when --config is omitted', () => {
+  it('uses the in-repo config without calling the name provider', () => {
     withLookupDirs('Repo', ({ gitRoot, env }) => {
-      writeConfig(path.join(gitRoot, DEFAULT_CONFIG_NAME));
+      const inRepo = writeConfig(path.join(gitRoot, DEFAULT_CONFIG_NAME));
+      const looked = resolveConfigPath(gitRoot, gitRoot, unusedLookup, undefined, env);
+      expect(looked).toEqual({ ok: true, value: inRepo });
+    });
+  });
+
+  it('returns the name provider error when no in-repo config exists', () => {
+    withLookupDirs('Repo', ({ gitRoot, env }) => {
       const looked = resolveConfigPath(
         gitRoot,
         gitRoot,
