@@ -297,13 +297,6 @@ export const eslintStep: GateStep = {
   },
 };
 
-/**
- * Merge-base tree under HEIMDALL_TMP (itself under os.tmpdir). Removed after the
- * baseline knip run; the runner's teardown still deletes HEIMDALL_TMP on
- * abort, timeout, or crash.
- */
-const KNIP_BASE_WORKDIR = 'knip-base';
-
 export const knipStep: GateStep = {
   name: 'knip',
   scopeToDiff: false,
@@ -326,7 +319,7 @@ export const knipStep: GateStep = {
       return toolFailedWithoutFindings('knip', ran.command, ran.result);
     }
 
-    const baseFindings = await knipFindingsAtMergeBase(ctx, ran.command);
+    const baseFindings = await findingsAtMergeBase(ctx, 'knip', ran.command, parseKnipOutput);
     if (!Array.isArray(baseFindings)) {
       return baseFindings;
     }
@@ -338,10 +331,23 @@ export const knipStep: GateStep = {
   },
 };
 
-async function knipFindingsAtMergeBase(ctx: StepContext, command: string): Promise<Finding[] | StepResult> {
-  const dest = path.join(ctx.tmpDir, KNIP_BASE_WORKDIR);
+/**
+ * Materialize the merge-base under HEIMDALL_TMP (itself under os.tmpdir), run
+ * `command` there, and parse findings. The copy is removed afterwards; the
+ * runner's teardown still deletes HEIMDALL_TMP on abort, timeout, or crash.
+ *
+ * Step-agnostic on purpose: knip (and later steps) pass their name and parser.
+ * Pair with findingsNotInBase to keep only findings that are new versus base.
+ */
+export async function findingsAtMergeBase(
+  ctx: StepContext,
+  stepName: CommandStepName,
+  command: string,
+  parse: (output: string) => Result<Finding[]>,
+): Promise<Finding[] | StepResult> {
+  const dest = path.join(ctx.tmpDir, `${stepName}-base`);
   try {
-    const timeoutMs = stepTimeoutMs(ctx.config, 'knip');
+    const timeoutMs = stepTimeoutMs(ctx.config, stepName);
     const materialized = await materializeCommit(ctx.cwd, ctx.scope.mergeBaseSha, dest, {
       timeoutMs,
       ...(ctx.abortSignal !== undefined ? { abortSignal: ctx.abortSignal } : {}),
@@ -349,23 +355,23 @@ async function knipFindingsAtMergeBase(ctx: StepContext, command: string): Promi
     if (!materialized.ok) {
       return {
         kind: 'error',
-        name: 'knip',
-        reason: `cannot compute knip baseline at ${ctx.scope.mergeBaseSha}: ${materialized.error}`,
+        name: stepName,
+        reason: `cannot compute ${stepName} baseline at ${ctx.scope.mergeBaseSha}: ${materialized.error}`,
       };
     }
     const linked = shareNodeModules(ctx.cwd, dest);
     if (!linked.ok) {
-      return { kind: 'error', name: 'knip', reason: linked.error };
+      return { kind: 'error', name: stepName, reason: linked.error };
     }
     const baseRan = await ctx.runCommand(command, dest, ctx.env, runCommandOptions(ctx, timeoutMs));
-    const crash = classifyCommandFailure('knip', command, baseRan, timeoutMs, ctx.abortSignal);
+    const crash = classifyCommandFailure(stepName, command, baseRan, timeoutMs, ctx.abortSignal);
     if (crash) {
-      return { kind: 'error', name: 'knip', reason: `knip baseline: ${crash}` };
+      return { kind: 'error', name: stepName, reason: `${stepName} baseline: ${crash}` };
     }
-    const parsed = parseOrError('knip', parseKnipOutput(baseRan.stdout), baseRan);
+    const parsed = parseOrError(stepName, parse(baseRan.stdout), baseRan);
     if (!Array.isArray(parsed)) {
       if (parsed.kind === 'error') {
-        return { kind: 'error', name: 'knip', reason: `knip baseline: ${parsed.reason}` };
+        return { kind: 'error', name: stepName, reason: `${stepName} baseline: ${parsed.reason}` };
       }
       return parsed;
     }

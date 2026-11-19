@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { runCommand } from './command.js';
 import {
   eslintStep,
+  findingsAtMergeBase,
   jscpdStep,
   knipStep,
   lineChecksStep,
@@ -14,7 +15,7 @@ import {
   type StepContext,
 } from './steps.js';
 import { formatFinding } from './report.js';
-import type { DiffScope, GateConfig } from './types.js';
+import { err, ok, type DiffScope, type Finding, type GateConfig, type Result } from './types.js';
 import { commandResult as result, parseTestConfig as cfg } from '../test/helpers/gate-test.js';
 import { commitAll, git, withTempRepo, writeRepoFile } from '../test/helpers/temp-repo.js';
 
@@ -1139,6 +1140,131 @@ describe('knipStep', () => {
           step.findings.some((hit) => hit.rule === 'exports' && hit.message === 'helper' && hit.file.includes('lib')),
         ).toBe(true);
         expect(step.findings.some((hit) => hit.message === 'leftover')).toBe(false);
+      }
+    });
+  });
+});
+
+function parseFakeTsv(output: string): Result<Finding[]> {
+  const findings: Finding[] = [];
+  for (const line of output.split('\n')) {
+    if (line === '') {
+      continue;
+    }
+    const parts = line.split('\t');
+    if (parts.length !== 4) {
+      return err('fake output is not file\\trule\\tmessage\\tline TSV');
+    }
+    const [file, rule, message, lineText] = parts;
+    const lineNo = Number(lineText);
+    if (file === undefined || rule === undefined || message === undefined || !Number.isInteger(lineNo)) {
+      return err('fake output is not file\\trule\\tmessage\\tline TSV');
+    }
+    findings.push({ step: 'jscpd', file, line: lineNo, rule, message });
+  }
+  return ok(findings);
+}
+
+describe('findingsAtMergeBase', () => {
+  it('runs the supplied command on a merge-base copy and parses with the caller parser', async () => {
+    await withTempRepo(async (repo) => {
+      writeRepoFile(repo, 'src/a.ts', 'export const a = 1;\n');
+      commitAll(repo, 'base');
+      const mergeBaseSha = git(repo, ['rev-parse', 'HEAD']).trim();
+      git(repo, ['checkout', '-q', '-b', 'feat']);
+      writeRepoFile(repo, 'src/a.ts', 'export const a = 2;\n');
+      commitAll(repo, 'feat');
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-base-findings-'));
+      try {
+        const dest = path.join(tmpDir, 'jscpd-base');
+        const parsed = await findingsAtMergeBase(
+          ctx({
+            cwd: repo,
+            tmpDir,
+            scope: { ...emptyScope, mergeBaseSha },
+            config: cfg({ steps: { jscpd: { command: 'fake-jscpd' } } }),
+            runCommand: async (command, cwd) => {
+              expect(command).toBe('fake-jscpd');
+              expect(cwd).toBe(dest);
+              expect(fs.readFileSync(path.join(cwd, 'src/a.ts'), 'utf8')).toBe('export const a = 1;\n');
+              return result({ exitCode: 0, stdout: 'src/a.ts\tduplicate\tclone\t1\n' });
+            },
+          }),
+          'jscpd',
+          'fake-jscpd',
+          parseFakeTsv,
+        );
+        expect(parsed).toEqual([{ step: 'jscpd', file: 'src/a.ts', line: 1, rule: 'duplicate', message: 'clone' }]);
+        expect(fs.existsSync(dest)).toBe(false);
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it('is a GATE ERROR that names the step when the merge-base cannot be materialized', async () => {
+    await withTempRepo(async (repo) => {
+      writeRepoFile(repo, 'src/a.ts', 'export const a = 1;\n');
+      commitAll(repo, 'base');
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-base-findings-'));
+      try {
+        const dest = path.join(tmpDir, 'jscpd-base');
+        const step = await findingsAtMergeBase(
+          ctx({
+            cwd: repo,
+            tmpDir,
+            scope: { ...emptyScope, mergeBaseSha: 'not-a-real-sha' },
+            config: cfg({ steps: { jscpd: { command: 'fake-jscpd' } } }),
+            runCommand: async () => result({ exitCode: 0, stdout: '' }),
+          }),
+          'jscpd',
+          'fake-jscpd',
+          parseFakeTsv,
+        );
+        expect(Array.isArray(step)).toBe(false);
+        if (!Array.isArray(step)) {
+          expect(step.kind).toBe('error');
+          if (step.kind === 'error') {
+            expect(step.reason).toMatch(/cannot compute jscpd baseline at not-a-real-sha/);
+          }
+        }
+        expect(fs.existsSync(dest)).toBe(false);
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+  });
+
+  it('is a GATE ERROR when the baseline command is missing (exit 127)', async () => {
+    await withTempRepo(async (repo) => {
+      writeRepoFile(repo, 'src/a.ts', 'export const a = 1;\n');
+      commitAll(repo, 'base');
+      const mergeBaseSha = git(repo, ['rev-parse', 'HEAD']).trim();
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-base-findings-'));
+      try {
+        const step = await findingsAtMergeBase(
+          ctx({
+            cwd: repo,
+            tmpDir,
+            scope: { ...emptyScope, mergeBaseSha },
+            config: cfg({ steps: { jscpd: { command: 'fake-jscpd' } } }),
+            runCommand: async () => result({ exitCode: 127, stderr: 'command not found' }),
+          }),
+          'jscpd',
+          'fake-jscpd',
+          parseFakeTsv,
+        );
+        expect(Array.isArray(step)).toBe(false);
+        if (!Array.isArray(step)) {
+          expect(step.kind).toBe('error');
+          if (step.kind === 'error') {
+            expect(step.reason).toBe(
+              'jscpd baseline: jscpd: command not found (exit 127); install the tool or fix steps.jscpd.command',
+            );
+          }
+        }
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
       }
     });
   });
