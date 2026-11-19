@@ -80,12 +80,19 @@ async function runShellList(
   runCommand: RunCommandFn,
   abortSignal: AbortSignal | undefined,
 ): Promise<StepResult | undefined> {
-  for (const command of commands) {
+  for (const [index, command] of commands.entries()) {
     const result = await runCommand(command, cwd, env, {
       timeoutMs: DEFAULT_STEP_TIMEOUT_MS,
       ...(abortSignal !== undefined ? { signal: abortSignal } : {}),
     });
-    const crash = classifyCommandFailure(label, command, result, DEFAULT_STEP_TIMEOUT_MS, abortSignal);
+    const crash = classifyCommandFailure(
+      label,
+      command,
+      result,
+      DEFAULT_STEP_TIMEOUT_MS,
+      abortSignal,
+      `${label}[${index}] ${JSON.stringify(command)}`,
+    );
     if (crash) {
       return { kind: 'error', name: label, reason: crash };
     }

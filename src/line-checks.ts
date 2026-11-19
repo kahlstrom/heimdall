@@ -34,15 +34,14 @@ export type LineCheckOptions = {
 };
 
 function suppressionKind(commentText: string, secrets: boolean): string | undefined {
-  const match = commentText.match(SUPPRESSION_RE);
-  const kind = match?.[0];
-  if (kind === undefined) {
-    return undefined;
+  const kinds = [...commentText.matchAll(new RegExp(SUPPRESSION_RE, 'g'))].map((match) => match[0]);
+  if (secrets) {
+    const secretKind = kinds.find((kind) => SECRET_SUPPRESSION_KINDS.has(kind));
+    if (secretKind !== undefined) {
+      return secretKind;
+    }
   }
-  if (!secrets && SECRET_SUPPRESSION_KINDS.has(kind)) {
-    return undefined;
-  }
-  return kind;
+  return kinds.find((kind) => !SECRET_SUPPRESSION_KINDS.has(kind));
 }
 
 function suppressionMessage(kind: string, line: string): string {

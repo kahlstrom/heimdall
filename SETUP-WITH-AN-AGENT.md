@@ -254,7 +254,8 @@ Then:
 - **GATE ERROR:** stop and report the full error exactly. Common causes are a
   config that was not found (the message lists every path tried), an unknown
   config key, a missing tool (shell exit 127 names the step and
-  `steps.<name>.command`), a missing or empty secrets/architecture rules file,
+  `steps.<name>.command`, or for setup/teardown the top-level key and the
+  failing command), a missing or empty secrets/architecture rules file,
   unparseable tool output, a timeout, a failed setup command, or a base guard
   (`requireParentBase`, or more changed files than `maxChangedFiles`). Suggest
   a fix, but do not apply it without asking.

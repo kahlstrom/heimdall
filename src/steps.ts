@@ -88,7 +88,9 @@ async function runConfigured(
 /**
  * Parse a tool's findings. Stderr (Node deprecation lines, `[DEP0040]`) is
  * attached to GATE ERROR messages, never to the parse. Unparseable output is
- * always GATE ERROR, including when the tool exits 0.
+ * always GATE ERROR, including when the tool exits 0. Secrets is the
+ * exception: the reason is a fixed message with the exit code only, so tool
+ * stdout/stderr cannot leak a matched secret.
  */
 function parseOrError<T>(
   name: StepName,
@@ -96,11 +98,17 @@ function parseOrError<T>(
   result: CommandResult,
 ): T | StepResult {
   if (!parsed.ok) {
-    const stderr = result.stderr.trim();
-    const reason = stderr ? `${parsed.error} (stderr: ${stderr.slice(0, 400)})` : parsed.error;
-    return { kind: 'error', name, reason };
+    return { kind: 'error', name, reason: parseFailureReason(name, parsed.error, result) };
   }
   return parsed.value;
+}
+
+function parseFailureReason(name: StepName, error: string, result: CommandResult): string {
+  if (name === 'secrets') {
+    return `secrets command exited ${result.exitCode ?? 'null'} with unparseable output`;
+  }
+  const stderr = result.stderr.trim();
+  return stderr ? `${error} (stderr: ${stderr.slice(0, 400)})` : error;
 }
 
 function jsonStdout(result: CommandResult, reportFile: string | undefined): string {
@@ -497,22 +505,18 @@ export const secretsStep: GateStep = {
     return config.steps.secrets?.enabled === true;
   },
   async run(ctx) {
-    const ran = await runConfigured(ctx, 'secrets');
-    if (!('result' in ran)) {
+    const ran = await runAndParseFindings(ctx, 'secrets', parseSecretsOutput);
+    if (!('command' in ran)) {
       return ran;
     }
-    const parsed = parseOrError('secrets', parseSecretsOutput(jsonStdout(ran.result, undefined)), ran.result);
-    if (!Array.isArray(parsed)) {
-      return parsed;
-    }
-    const scoped = scopedOrPass(secretsStep, parsed, ctx);
+    const scoped = scopedOrPass(secretsStep, ran.findings, ctx);
     if (scoped.kind !== 'pass') {
       return scoped;
     }
-    if (ran.result.exitCode === 0 || parsed.length > 0) {
+    if (ran.result.exitCode === 0 || ran.findings.length > 0) {
       return { kind: 'pass', name: 'secrets' };
     }
-    // Do not attach stdout: it may contain secretlint message text or matched secrets.
+    // Do not attach stdout/stderr: they may contain secretlint message text or matched secrets.
     return {
       kind: 'error',
       name: 'secrets',

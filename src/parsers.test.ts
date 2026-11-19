@@ -318,11 +318,14 @@ describe('parseSecretsOutput', () => {
     }
   });
 
-  it('errors on malformed non-JSON output', () => {
-    const parsed = parseSecretsOutput('found secret: ghp_not-json');
-    expect(parsed.ok).toBe(false);
-    if (!parsed.ok) {
-      expect(parsed.error).toMatch(/not JSON/);
+  it('does not embed unparseable output in the error', () => {
+    for (const output of [`found secret: ${LEAKED_SECRET}`, `{ "token": "${LEAKED_SECRET}"`]) {
+      const parsed = parseSecretsOutput(output);
+      expect(parsed.ok).toBe(false);
+      if (!parsed.ok) {
+        expect(parsed.error).toBe('secrets output is not JSON');
+        expect(parsed.error).not.toContain(LEAKED_SECRET);
+      }
     }
   });
 

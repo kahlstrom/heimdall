@@ -382,7 +382,8 @@ function fileLoc(value: unknown): { file: string; start: number; end: number } |
 export function parseSecretsOutput(output: string): Result<Finding[]> {
   const json = extractJson(output);
   if (!json.ok) {
-    return err(`secrets output is not JSON (${json.error})`);
+    // Never embed json.error: JSON.parse quotes the input, which may be a secret.
+    return err('secrets output is not JSON');
   }
   return parseSecretsJson(json.value);
 }

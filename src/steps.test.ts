@@ -366,17 +366,43 @@ describe('secretsStep', () => {
     );
   });
 
-  it('is a GATE ERROR when secretlint output is not JSON', async () => {
+  it('is a GATE ERROR with no tool text when secrets output is unparseable', async () => {
     const step = await secretsStep.run(
       ctx({
         config: cfg({ steps: { secrets: { command: 'secretlint --format json "**/*"' } } }),
-        runCommand: async () => result({ exitCode: 1, stdout: `found secret: ${SECRETS_LEAK}` }),
+        runCommand: async () =>
+          result({
+            exitCode: 1,
+            stdout: `{ "found": "${SECRETS_LEAK}"`,
+            stderr: `secretlint: matched ${SECRETS_LEAK}`,
+          }),
       }),
     );
     expect(step.kind).toBe('error');
     if (step.kind === 'error') {
-      expect(step.reason).toMatch(/not JSON/);
+      expect(step.reason).toBe('secrets command exited 1 with unparseable output');
       expect(step.reason).not.toContain(SECRETS_LEAK);
+      expect(JSON.stringify(step)).not.toContain(SECRETS_LEAK);
+    }
+  });
+
+  it('is a GATE ERROR with no tool text when secrets exits non-zero with empty findings', async () => {
+    const step = await secretsStep.run(
+      ctx({
+        config: cfg({ steps: { secrets: { command: 'secretlint --format json "**/*"' } } }),
+        runCommand: async () =>
+          result({
+            exitCode: 2,
+            stdout: '[]',
+            stderr: `matched ${SECRETS_LEAK}`,
+          }),
+      }),
+    );
+    expect(step.kind).toBe('error');
+    if (step.kind === 'error') {
+      expect(step.reason).toMatch(/without parseable findings/);
+      expect(step.reason).not.toContain(SECRETS_LEAK);
+      expect(JSON.stringify(step)).not.toContain(SECRETS_LEAK);
     }
   });
 

@@ -265,6 +265,38 @@ describe('secret-scanner suppressions', () => {
     });
     expect(hits.some((hit) => hit.rule === 'suppression')).toBe(true);
   });
+
+  const mixedOrders: ReadonlyArray<{ name: string; source: string }> = [
+    {
+      name: 'gitleaks:allow before eslint-disable',
+      source: "const token = 'leaked-value'; // gitleaks:allow eslint-disable-line x\n",
+    },
+    {
+      name: 'eslint-disable before gitleaks:allow',
+      source: "const token = 'leaked-value'; // eslint-disable-line x gitleaks:allow\n",
+    },
+  ];
+
+  for (const form of mixedOrders) {
+    it(`names only the secret kind for ${form.name} when secrets is on`, () => {
+      const hits = suppressionHits(scanAddedSource('src/a.ts', form.source, new Set([1]), { secrets: true }));
+      expect(hits).toEqual([
+        { step: 'line-checks', file: 'src/a.ts', line: 1, rule: 'suppression', message: 'gitleaks:allow' },
+        { step: 'line-checks', file: 'src/a.ts', line: 1, rule: 'no-silencing', message: 'gitleaks:allow' },
+      ]);
+      expect(hits.every((hit) => !hit.message.includes('leaked-value'))).toBe(true);
+      expect(hits.every((hit) => hit.message !== form.source.trim())).toBe(true);
+    });
+
+    it(`still flags eslint-disable for ${form.name} when secrets is off`, () => {
+      const hits = suppressionHits(scanAddedSource('src/a.ts', form.source, new Set([1])));
+      expect(hits).toEqual([
+        { step: 'line-checks', file: 'src/a.ts', line: 1, rule: 'suppression', message: form.source.trim() },
+        { step: 'line-checks', file: 'src/a.ts', line: 1, rule: 'no-silencing', message: form.source.trim() },
+      ]);
+      expect(hits.every((hit) => hit.message.includes('eslint-disable'))).toBe(true);
+    });
+  }
 });
 
 describe('docs are not scanned as source', () => {

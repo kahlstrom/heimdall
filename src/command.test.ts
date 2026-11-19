@@ -141,6 +141,28 @@ describe('classifyCommandFailure', () => {
       'knip: command not found (exit 127); install the tool or fix steps.knip.command',
     );
   });
+
+  it('names the top-level setup key and failing command, not steps.setup.command', () => {
+    const reason = classifyCommandFailure(
+      'setup',
+      'missing-setup-bin',
+      {
+        exitCode: 127,
+        signal: null,
+        stdout: '',
+        stderr: 'missing-setup-bin: command not found',
+        spawnError: undefined,
+        timedOut: false,
+      },
+      300_000,
+      undefined,
+      'setup[0] "missing-setup-bin"',
+    );
+    expect(reason).toBe(
+      'setup: command not found (exit 127); install the tool or fix setup[0] "missing-setup-bin"',
+    );
+    expect(reason).not.toMatch(/steps\.setup/);
+  });
 });
 
 describe('combinedOutput', () => {

@@ -365,6 +365,32 @@ describe('runGate exit codes', () => {
     });
   });
 
+  it('setup command-not-found (exit 127) names setup and the failing command', async () => {
+    await seededRepo(async (repo) => {
+      const outcome = await runGate({
+        cwd: repo,
+        runCommand: async (command) => {
+          if (command === 'missing-setup-bin') {
+            return result({ exitCode: 127, stderr: 'missing-setup-bin: command not found' });
+          }
+          return result({ exitCode: 0, stdout: 'ok\n' });
+        },
+      });
+      expect(outcome.kind).toBe('error');
+      expect(outcome.exitCode).toBe(2);
+      if (outcome.kind === 'error') {
+        expect(outcome.reason).toBe(
+          'setup: command not found (exit 127); install the tool or fix setup[0] "missing-setup-bin"',
+        );
+        expect(outcome.reason).not.toMatch(/steps\.setup/);
+      }
+    }, {
+      steps: { tests: { command: 'npx vitest run' } },
+      setup: ['missing-setup-bin'],
+      teardown: ['echo down'],
+    });
+  });
+
   it('setup failure is a GATE ERROR and still runs teardown', async () => {
     await seededRepo(async (repo) => {
       const ran: string[] = [];
