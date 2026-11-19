@@ -42,6 +42,33 @@ export function writeHomeGateConfig(
 }
 
 /**
+ * POSIX single-quote `value` so a shim can interpolate a path without expanding
+ * `$` or backticks.
+ */
+export function posixShellQuote(value: string): string {
+  return `'${value.replaceAll("'", `'\\''`)}'`;
+}
+
+/**
+ * Prepend a throwaway directory containing executable `name` to PATH for `fn`,
+ * then delete it. `script` is written verbatim so `$` and backticks are not
+ * expanded at write time; quote interpolated values with `posixShellQuote`.
+ */
+export async function withFakeBinOnPath(
+  name: string,
+  script: string,
+  fn: () => Promise<void>,
+): Promise<void> {
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-fake-bin-'));
+  fs.writeFileSync(path.join(bin, name), script, { mode: 0o755 });
+  try {
+    await withProcessEnv({ PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` }, fn);
+  } finally {
+    fs.rmSync(bin, { recursive: true, force: true });
+  }
+}
+
+/**
  * Run `fn` with temporary process.env changes, then restore the previous
  * values. Missing keys in `unset` are deleted for the duration of `fn`.
  */

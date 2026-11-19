@@ -11,6 +11,7 @@ import {
   packageConfigsDir,
   resolveConfigPath,
 } from './config.js';
+import { err, ok, type Result } from './types.js';
 
 const MINIMAL_CONFIG = JSON.stringify({ steps: { tests: { command: 'npm test' } } });
 
@@ -22,7 +23,12 @@ function writeConfig(filePath: string, body: string = MINIMAL_CONFIG): string {
 
 function withLookupDirs(
   folderName: string,
-  fn: (dirs: { gitRoot: string; gateHome: string; env: NodeJS.ProcessEnv; lookupName: string }) => void,
+  fn: (dirs: {
+    gitRoot: string;
+    gateHome: string;
+    env: NodeJS.ProcessEnv;
+    lookupName: () => Result<string>;
+  }) => void,
   lookupName: string = folderName,
 ): void {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'heimdall-lookup-'));
@@ -31,10 +37,14 @@ function withLookupDirs(
     const gateHome = path.join(parent, 'home');
     fs.mkdirSync(gitRoot, { recursive: true });
     fs.mkdirSync(gateHome, { recursive: true });
-    fn({ gitRoot, gateHome, env: { HEIMDALL_HOME: gateHome }, lookupName });
+    fn({ gitRoot, gateHome, env: { HEIMDALL_HOME: gateHome }, lookupName: () => ok(lookupName) });
   } finally {
     fs.rmSync(parent, { recursive: true, force: true });
   }
+}
+
+function unusedLookup(): Result<string> {
+  throw new Error('config lookup name is not used when --config is given');
 }
 
 describe('loadGateConfigFile', () => {
@@ -61,10 +71,10 @@ describe('loadGateConfigFile', () => {
 
 describe('resolveConfigPath', () => {
   it('prefers an explicit --config path when that file exists', () => {
-    withLookupDirs('Repo', ({ gitRoot, env, lookupName }) => {
+    withLookupDirs('Repo', ({ gitRoot, env }) => {
       const explicit = writeConfig(path.join(gitRoot, 'custom.heimdall.json'));
       writeConfig(path.join(gitRoot, DEFAULT_CONFIG_NAME));
-      const looked = resolveConfigPath(gitRoot, gitRoot, lookupName, 'custom.heimdall.json', env);
+      const looked = resolveConfigPath(gitRoot, gitRoot, unusedLookup, 'custom.heimdall.json', env);
       expect(looked).toEqual({ ok: true, value: explicit });
     });
   });
@@ -158,17 +168,31 @@ describe('resolveConfigPath', () => {
   });
 
   it('does not fall through when --config is missing; the error lists that path only', () => {
-    withLookupDirs('Repo', ({ gitRoot, gateHome, env, lookupName }) => {
+    withLookupDirs('Repo', ({ gitRoot, gateHome, env }) => {
       writeConfig(path.join(gitRoot, DEFAULT_CONFIG_NAME));
       writeConfig(path.join(gateHome, 'Repo', DEFAULT_CONFIG_NAME));
       const explicit = path.join(gitRoot, 'missing.heimdall.json');
-      const looked = resolveConfigPath(gitRoot, gitRoot, lookupName, 'missing.heimdall.json', env);
+      const looked = resolveConfigPath(gitRoot, gitRoot, unusedLookup, 'missing.heimdall.json', env);
       expect(looked.ok).toBe(false);
       if (!looked.ok) {
         expect(looked.error).toContain(explicit);
         expect(looked.error).not.toContain(path.join(gitRoot, DEFAULT_CONFIG_NAME));
         expect(looked.error).not.toContain(path.join(gateHome, 'Repo', DEFAULT_CONFIG_NAME));
       }
+    });
+  });
+
+  it('returns the name provider error when --config is omitted', () => {
+    withLookupDirs('Repo', ({ gitRoot, env }) => {
+      writeConfig(path.join(gitRoot, DEFAULT_CONFIG_NAME));
+      const looked = resolveConfigPath(
+        gitRoot,
+        gitRoot,
+        () => err('cannot resolve git common dir'),
+        undefined,
+        env,
+      );
+      expect(looked).toEqual({ ok: false, error: 'cannot resolve git common dir' });
     });
   });
 
@@ -227,7 +251,7 @@ describe('resolveConfigPath', () => {
     // Unique folder name so this cannot match a real configs/<repo> or home folder.
     const unique = `heimdall-default-home-${process.pid}-${Date.now()}`;
     const gitRoot = path.join(os.tmpdir(), unique);
-    const looked = resolveConfigPath('/cwd', gitRoot, unique, undefined, {});
+    const looked = resolveConfigPath('/cwd', gitRoot, () => ok(unique), undefined, {});
     expect(looked.ok).toBe(false);
     if (!looked.ok) {
       const packagePath = path.join(packageConfigsDir(), unique, DEFAULT_CONFIG_NAME);

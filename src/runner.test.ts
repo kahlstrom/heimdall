@@ -9,6 +9,8 @@ import { runGate } from './runner.js';
 import {
   commandResult as result,
   failFindings,
+  posixShellQuote,
+  withFakeBinOnPath,
   withProcessEnv,
   withTempGateHome,
   writeHomeGateConfig,
@@ -89,31 +91,20 @@ function expectSameFile(actual: string | undefined, expected: string): void {
 }
 
 /**
- * Put a `git` shim first on PATH that fails `--git-common-dir` and forwards
- * every other invocation to the real git. Proves `--config` does not depend
- * on home-config name lookup.
+ * Shim that fails `--git-common-dir` and forwards every other invocation to
+ * the real git. Proves `--config` does not depend on home-config name lookup.
  */
-async function withGitCommonDirBlocked(fn: () => Promise<void>): Promise<void> {
+function gitCommonDirBlockingShim(): string {
   const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
-  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-fake-git-'));
-  fs.writeFileSync(
-    path.join(bin, 'git'),
-    `#!/bin/sh
+  return `#!/bin/sh
 for arg in "$@"; do
   if [ "$arg" = "--git-common-dir" ]; then
     echo "git-common-dir blocked" >&2
     exit 1
   fi
 done
-exec ${JSON.stringify(realGit)} "$@"
-`,
-    { mode: 0o755 },
-  );
-  try {
-    await withProcessEnv({ PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` }, fn);
-  } finally {
-    fs.rmSync(bin, { recursive: true, force: true });
-  }
+exec ${posixShellQuote(realGit)} "$@"
+`;
 }
 
 async function withLoosenedConfig(
@@ -709,7 +700,7 @@ describe('runGate exit codes', () => {
       git(repo, ['checkout', '-q', '-b', 'feat']);
       writeRepoFile(repo, 'src/new.ts', 'export const value = 1;\n');
       commitAll(repo, 'feat');
-      await withGitCommonDirBlocked(async () => {
+      await withFakeBinOnPath('git', gitCommonDirBlockingShim(), async () => {
         const blocked = await runGate({ cwd: repo, ...mockPass() });
         expect(blocked.kind).toBe('error');
         if (blocked.kind === 'error') {
@@ -1261,5 +1252,14 @@ describe('runGate base guard', () => {
       expect(prelude).toContain(`merge-base: ${mergeBase.slice(0, 7)}\n`);
       expect(prelude).toContain('changed files: 1\n');
     });
+  });
+});
+
+describe('posixShellQuote', () => {
+  it('keeps $ and backticks literal when interpolated into sh', () => {
+    const printed = execFileSync('sh', ['-c', `printf '%s' ${posixShellQuote('$HOME and `uname`')}`], {
+      encoding: 'utf8',
+    });
+    expect(printed).toBe('$HOME and `uname`');
   });
 });

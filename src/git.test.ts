@@ -13,7 +13,7 @@ import {
   runGit,
   splitNul,
 } from './git.js';
-import { withProcessEnv } from '../test/helpers/gate-test.js';
+import { withFakeBinOnPath } from '../test/helpers/gate-test.js';
 import { addWorktree, commitAll, git, withTempRepo, writeRepoFile } from '../test/helpers/temp-repo.js';
 
 async function withArchiveDest(fn: (dest: string) => Promise<void>): Promise<void> {
@@ -395,16 +395,6 @@ describe('runGit', () => {
   });
 });
 
-async function withFakeTarOnPath(script: string, fn: () => Promise<void>): Promise<void> {
-  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-fake-tar-'));
-  fs.writeFileSync(path.join(bin, 'tar'), script, { mode: 0o755 });
-  try {
-    await withProcessEnv({ PATH: `${bin}${path.delimiter}${process.env.PATH ?? ''}` }, fn);
-  } finally {
-    fs.rmSync(bin, { recursive: true, force: true });
-  }
-}
-
 function expectTarExtractFailed(archived: Awaited<ReturnType<typeof materializeCommit>>): asserts archived is { ok: false; error: string } {
   expect(archived.ok).toBe(false);
   if (!archived.ok) {
@@ -467,7 +457,7 @@ describe('materializeCommit', () => {
       writeRepoFile(repo, 'README.md', 'base\n');
       commitAll(repo, 'initial');
       const sha = git(repo, ['rev-parse', 'HEAD']).trim();
-      await withFakeTarOnPath('#!/bin/sh\ncat >/dev/null\necho "tar boom" >&2\nexit 1\n', async () => {
+      await withFakeBinOnPath('tar', '#!/bin/sh\ncat >/dev/null\necho "tar boom" >&2\nexit 1\n', async () => {
         await withArchiveDest(async (dest) => {
           const archived = await materializeCommit(repo, sha, dest);
           expectTarExtractFailed(archived);
@@ -481,7 +471,7 @@ describe('materializeCommit', () => {
       fs.writeFileSync(path.join(repo, 'blob.bin'), Buffer.alloc(128 * 1024));
       commitAll(repo, 'blob');
       const sha = git(repo, ['rev-parse', 'HEAD']).trim();
-      await withFakeTarOnPath('#!/bin/sh\necho "tar boom" >&2\nexit 1\n', async () => {
+      await withFakeBinOnPath('tar', '#!/bin/sh\necho "tar boom" >&2\nexit 1\n', async () => {
         await withArchiveDest(async (dest) => {
           const started = Date.now();
           const archived = await materializeCommit(repo, sha, dest, { timeoutMs: 2000 });

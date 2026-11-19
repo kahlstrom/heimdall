@@ -202,9 +202,8 @@ function addHomeIfDistinct(
 }
 
 /**
- * Paths to try for a Heimdall config, in order. `--config` is exclusive: the git
- * root and `$HEIMDALL_HOME` are not consulted when it is given. After the in-repo
- * file (`heimdall.config.json`, then deprecated `gate.config.json`), home lookup
+ * Paths to try for a Heimdall config, in order. After the in-repo file
+ * (`heimdall.config.json`, then deprecated `gate.config.json`), home lookup
  * uses one repo name from the git common dir, then lowercased when that differs
  * (`~/Projects/MyApp` finds `$HEIMDALL_HOME/myapp`). The work-tree folder basename
  * is not a separate candidate. `$HEIMDALL_HOME` defaults to this package's
@@ -214,16 +213,10 @@ function addHomeIfDistinct(
  * it; uncommitted files in that config directory are a separate RED check.
  */
 function configLookupCandidates(
-  cwd: string,
   gitRoot: string,
   lookupName: string,
-  explicitPath: string | undefined,
   env: NodeJS.ProcessEnv,
 ): readonly ConfigCandidate[] {
-  if (explicitPath) {
-    const filePath = path.resolve(cwd, explicitPath);
-    return [{ path: filePath, exists: () => fs.existsSync(filePath) }];
-  }
   const home = resolveHeimdallHome(env);
   const heimdallHome = heimdallFallbackHome();
   const compatHome = compatibilityGateHome();
@@ -543,17 +536,30 @@ export function loadGateConfigFile(configPath: string): Result<GateConfig> {
 /**
  * First existing path from the documented lookup order. A package-level file
  * in a subdirectory is ignored so it cannot silently drive root-cwd commands.
- * Missing means GATE ERROR listing every path that was tried. `gate.config.json`
- * is accepted as a deprecated fallback after `heimdall.config.json`.
+ * `--config` is exclusive: `lookupName` is not called, and the git root and
+ * `$HEIMDALL_HOME` are not consulted. Missing means GATE ERROR listing every
+ * path that was tried. `gate.config.json` is accepted as a deprecated fallback
+ * after `heimdall.config.json`.
  */
 export function resolveConfigPath(
   cwd: string,
   gitRoot: string,
-  lookupName: string,
+  lookupName: () => Result<string>,
   explicitPath?: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Result<string> {
-  const candidates = configLookupCandidates(cwd, gitRoot, lookupName, explicitPath, env);
+  if (explicitPath) {
+    const filePath = path.resolve(cwd, explicitPath);
+    if (fs.existsSync(filePath)) {
+      return ok(filePath);
+    }
+    return err(missingConfigError([filePath]));
+  }
+  const name = lookupName();
+  if (!name.ok) {
+    return name;
+  }
+  const candidates = configLookupCandidates(gitRoot, name.value, env);
   for (const candidate of candidates) {
     if (candidate.exists()) {
       return ok(candidate.path);

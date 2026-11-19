@@ -330,13 +330,13 @@ export async function runGate(options: RunGateOptions): Promise<GateOutcome> {
     return gateError(started.error, undefined);
   }
   const repoRoot = started.value;
-  // `--config` is exclusive of home lookup; do not abort on git-common-dir.
-  const lookupName = options.configPath ? ok('') : gitConfigLookupName(repoRoot);
-  if (!lookupName.ok) {
-    return gateError(lookupName.error, undefined);
-  }
-
-  const lookedUp = resolveConfigPath(options.cwd, repoRoot, lookupName.value, options.configPath, processEnv);
+  const lookedUp = resolveConfigPath(
+    options.cwd,
+    repoRoot,
+    () => gitConfigLookupName(repoRoot),
+    options.configPath,
+    processEnv,
+  );
   if (!lookedUp.ok) {
     return gateError(lookedUp.error, undefined);
   }
