@@ -43,10 +43,12 @@ Follow these for the whole setup, even if a step seems to need otherwise:
   findings, or **GATE ERROR (exit 2)** when Heimdall itself or its setup is
   broken.
 - It compares the working tree (including uncommitted and untracked files) to
-  the merge-base of a base ref and fails only on **new** problems. Lint, secrets,
-  and jscpd findings are limited to changed files and lines; knip and architecture
-  fail only on findings that are not present at the merge-base. Tests and
-  typecheck run in full. Built-in `line-checks` look only at added lines.
+  the merge-base of a base ref and fails only on **new** problems. Secrets and
+  jscpd findings are limited to changed files and lines. An ESLint finding
+  counts if it is on an added line, or if it is new versus the merge-base
+  anywhere. Knip and architecture fail only on findings that are not present
+  at the merge-base. Tests and typecheck run in full. Built-in `line-checks`
+  look only at added lines.
 - Each repo needs a `heimdall.config.json` that lists the commands to run.
 
 ## Step 1: Check prerequisites and install
@@ -243,12 +245,14 @@ heimdall
 Then:
 
 - **GREEN:** report it with the summary pasted exactly.
-- **RED:** paste the findings and summary exactly, then explain them. Lint,
-  secrets, jscpd, knip, architecture and line-checks only count **new** problems versus the
-  merge-base, so on a branch with no changes those should be quiet. Secrets
-  findings print as `file:line [rule]` with no message text. Tests and
-  typecheck run in full, so failures that already exist on the base branch
-  will show here. Tell the user what is failing and ask what they want to do.
+- **RED:** paste the findings and summary exactly, then explain them. Secrets,
+  jscpd, and line-checks only count added-line hits. ESLint counts a finding
+  on an added line, or one that is new versus the merge-base anywhere. Knip
+  and architecture only count findings not present at the merge-base. On a
+  branch with no changes those should be quiet. Secrets findings print as
+  `file:line [rule]` with no message text. Tests and typecheck run in full, so
+  failures that already exist on the base branch will show here. Tell the user
+  what is failing and ask what they want to do.
   Do **not** fix code, edit or delete tests, add flakes, disable steps, or
   loosen the config to get GREEN unless the user explicitly OKs that change.
 - **GATE ERROR:** stop and report the full error exactly. Common causes are a

@@ -233,7 +233,7 @@ its index.
 | --- | --- |
 | `tests` | Always runs in full. Prefer a JSON reporter (`vitest --reporter=json`, `jest --json`) so failures are not scraped from text. |
 | `typecheck` | Full typecheck (`tsc --noEmit` or equivalent). |
-| `eslint` | Prefer `-f json` so findings can be scoped. Extra key: `maxWarnings`. Hits on added lines always count; leftovers on untouched lines count when they are new versus the merge-base. |
+| `eslint` | Prefer `-f json` so findings can be scoped. Extra key: `maxWarnings`. A finding counts if it is on an added line, or if it is new versus the merge-base anywhere. The baseline run happens only when the branch has findings off added lines; a baseline failure is a GATE ERROR. |
 | `knip` | Prefer `--reporter json`. |
 | `jscpd` | Must print JSON on stdout. `$HEIMDALL_TMP` is a per-run temp dir. |
 | `secrets` | Prefer secretlint 14.x `--format json`. No default command. Findings are scoped to added lines; the report prints rule id and `file:line` only, never the matched secret. |
@@ -245,10 +245,11 @@ its index.
 | --- | --- | --- | --- |
 | `maxWarnings` | non-negative integer | unset (warnings ignored) | `0` |
 
-When set, new ESLint warnings (severity 1) on added lines — and warnings that
-are new versus the merge-base on untouched lines — are counted; more than this
-many is **RED** (`file:line [rule] message`). Errors still fail the step. An
-invalid value is a GATE ERROR.
+When set, ESLint warnings (severity 1) count if they are on an added line, or
+if they are new versus the merge-base anywhere; more than this many is **RED**
+(`file:line [rule] message`). The baseline run happens only when the branch
+has findings off added lines; a baseline failure is a GATE ERROR. Errors still
+fail the step. An invalid value is a GATE ERROR.
 
 ### `steps.line-checks`
 
@@ -269,19 +270,22 @@ Built-in. No command.
 ### New problems only
 
 Secrets and jscpd findings are limited to **files and lines changed versus the
-merge-base of `baseRef`**, including uncommitted and untracked files. ESLint
-keeps those added-line hits and also fails on findings that are **new versus
-the merge-base** even on untouched lines (an import left unused after its last
-use is deleted is caught; a pre-existing error in untouched code is not). That
-baseline run happens only when the branch has eslint findings that are not on
-added lines; a baseline failure is a GATE ERROR, not a pass. Knip and
-architecture run on the **whole project** and fail only on findings that are
-**not present at the merge-base** (a helper left unused after its last caller
-is deleted is caught; old dead code in untouched areas is not). If the
-merge-base knip or architecture result cannot be computed, that is a GATE
-ERROR, not a pass. Tests and typecheck run in full. `line-checks` only looks
-at added lines. An empty diff against the resolved base prints a **WARNING**
-in the summary naming that base.
+merge-base of `baseRef`**, including uncommitted and untracked files. An ESLint
+finding counts if it is on an added line, or if it is **new versus the
+merge-base** anywhere (an import left unused after its last use is deleted is
+caught; a pre-existing error in untouched code is not). That baseline run
+happens only when the branch has eslint findings that are not on added lines,
+so ESLint may run twice and a repo with a slow ESLint step pays that time. A
+baseline failure is a GATE ERROR, not a pass. Knip and architecture run on the
+**whole project** and fail only on findings that are **not present at the
+merge-base** (a helper left unused after its last caller is deleted is caught;
+old dead code in untouched areas is not). If the merge-base knip or
+architecture result cannot be computed, that is a GATE ERROR, not a pass.
+New-versus-base matching for knip, architecture, and eslint uses **file, rule,
+and message** (not line) and counts duplicates: a second identical finding is
+new if the merge-base only has one. Tests and typecheck run in full.
+`line-checks` only looks at added lines. An empty diff against the resolved
+base prints a **WARNING** in the summary naming that base.
 
 ## Built-in checks
 
@@ -458,7 +462,9 @@ in `$HEIMDALL_TMP/knip-base` (no stash) and runs the same knip command there.
 Architecture does the same in `$HEIMDALL_TMP/architecture-base` and skips that
 baseline run when the branch has no error-severity violations. ESLint uses
 `$HEIMDALL_TMP/eslint-base` the same way, and skips that run when every finding
-is already on an added line.
+is already on an added line. The merge-base copy resolves the repo's own
+workspace packages to the base copy's source; third-party packages are shared
+from the live install.
 
 ## Sample output
 
