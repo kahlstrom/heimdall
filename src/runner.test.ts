@@ -1146,9 +1146,9 @@ describe('runGate base guard', () => {
       git(repo, ['checkout', '-q', '-b', 'feat']);
       writeRepoFile(repo, 'src/feat.ts', 'export const f = 1;\n');
       commitAll(repo, 'feat');
-      git(repo, ['checkout', '-q', '-b', 'story']);
-      writeRepoFile(repo, 'src/story.ts', 'export const s = 1;\n');
-      commitAll(repo, 'story');
+      git(repo, ['checkout', '-q', '-b', 'child']);
+      writeRepoFile(repo, 'src/child.ts', 'export const c = 1;\n');
+      commitAll(repo, 'child');
       const logs: string[] = [];
       const outcome = await runGate({
         cwd: repo,
