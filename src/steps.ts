@@ -504,6 +504,7 @@ export const lineChecksStep: GateStep = {
       const findings = runLineChecks(ctx.cwd, ctx.scope, {
         extras: lineChecks?.enabled === true,
         allowSilencing: lineChecks?.allowSilencing ?? [],
+        secrets: ctx.config.steps.secrets?.enabled === true,
       });
       if (!findings.ok) {
         return { kind: 'error', name: 'line-checks', reason: findings.error };

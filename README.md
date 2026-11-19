@@ -278,6 +278,10 @@ On by default for added lines in `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, and
   `void foo()`, `void promise.then(...)`, or `const x = void 0`.
 - New `eslint-disable`, `eslint-disable-next-line`, `@ts-ignore`,
   `@ts-expect-error`, or `@ts-nocheck` comments.
+- When `steps.secrets` is enabled, new `secretlint-disable` comments (any
+  form, including `-line` and `-next-line`) and `gitleaks:allow`. The finding
+  names the suppression kind only — never the rest of the line, which may
+  hold a secret.
 - Newly added names that start with `_` to dodge unused warnings, specifically:
   function / method / arrow / constructor **parameters**; `const` / `let` /
   `var` identifiers; `function _name` declarations; `catch (_e)`; array

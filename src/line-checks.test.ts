@@ -214,6 +214,59 @@ describe('no-silencing', () => {
   });
 });
 
+describe('secret-scanner suppressions', () => {
+  const forms: ReadonlyArray<{ name: string; kind: string; source: string }> = [
+    { name: 'secretlint-disable', kind: 'secretlint-disable', source: '// secretlint-disable\nconst x = 1;\n' },
+    {
+      name: 'secretlint-disable-line',
+      kind: 'secretlint-disable',
+      source: "const token = 'leaked-value'; // secretlint-disable-line\n",
+    },
+    {
+      name: 'secretlint-disable-next-line',
+      kind: 'secretlint-disable',
+      source: '// secretlint-disable-next-line\nconst x = 1;\n',
+    },
+    {
+      name: 'gitleaks:allow',
+      kind: 'gitleaks:allow',
+      source: "const token = 'leaked-value'; // gitleaks:allow\n",
+    },
+  ];
+
+  function suppressionHits(hits: ReturnType<typeof scanAddedSource>) {
+    return hits.filter((hit) => hit.rule === 'suppression' || hit.rule === 'no-silencing');
+  }
+
+  for (const form of forms) {
+    it(`flags added ${form.name} when secrets is on, naming only the kind`, () => {
+      const hits = suppressionHits(scanAddedSource('src/a.ts', form.source, new Set([1]), { secrets: true }));
+      expect(hits).toEqual([
+        { step: 'line-checks', file: 'src/a.ts', line: 1, rule: 'suppression', message: form.kind },
+        { step: 'line-checks', file: 'src/a.ts', line: 1, rule: 'no-silencing', message: form.kind },
+      ]);
+    });
+
+    it(`does not flag added ${form.name} when secrets is off`, () => {
+      const hits = suppressionHits(scanAddedSource('src/a.ts', form.source, new Set([1])));
+      expect(hits).toEqual([]);
+    });
+  }
+
+  it('does not flag a secretlint-disable comment on an unchanged line', () => {
+    const source = '// secretlint-disable\nconst x = 1;\n';
+    const hits = suppressionHits(scanAddedSource('src/a.ts', source, new Set([2]), { secrets: true }));
+    expect(hits).toEqual([]);
+  });
+
+  it('still flags eslint-disable when secrets is on', () => {
+    const hits = scanAddedSource('src/a.ts', '// eslint-disable-next-line no-console\nconsole.log(1);\n', new Set([1]), {
+      secrets: true,
+    });
+    expect(hits.some((hit) => hit.rule === 'suppression')).toBe(true);
+  });
+});
+
 describe('docs are not scanned as source', () => {
   it('does not flag a markdown bullet that mentions eslint-disable', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-lines-md-'));

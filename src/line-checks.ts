@@ -17,17 +17,38 @@ import {
   type Result,
 } from './types.js';
 
-const SUPPRESSION_RE = /eslint-disable|@ts-ignore|@ts-expect-error|@ts-nocheck/;
+const SUPPRESSION_RE = /eslint-disable|@ts-ignore|@ts-expect-error|@ts-nocheck|secretlint-disable|gitleaks:allow/;
+const SECRET_SUPPRESSION_KINDS = new Set(['secretlint-disable', 'gitleaks:allow']);
 
 export type ScanAddedSourceOptions = {
   readonly extras?: boolean;
   readonly noSilencing?: boolean;
+  /** When true, also flag new secretlint-disable / gitleaks:allow comments. */
+  readonly secrets?: boolean;
 };
 
 export type LineCheckOptions = {
   readonly extras?: boolean;
   readonly allowSilencing?: readonly string[];
+  readonly secrets?: boolean;
 };
+
+function suppressionKind(commentText: string, secrets: boolean): string | undefined {
+  const match = commentText.match(SUPPRESSION_RE);
+  const kind = match?.[0];
+  if (kind === undefined) {
+    return undefined;
+  }
+  if (!secrets && SECRET_SUPPRESSION_KINDS.has(kind)) {
+    return undefined;
+  }
+  return kind;
+}
+
+function suppressionMessage(kind: string, line: string): string {
+  // Secret-scanner comments may sit on a line that still holds a secret.
+  return SECRET_SUPPRESSION_KINDS.has(kind) ? kind : line.trim();
+}
 
 function scriptKindForPath(filePath: string): ts.ScriptKind | undefined {
   if (filePath.endsWith('.tsx')) return ts.ScriptKind.TSX;
@@ -205,19 +226,22 @@ export function scanAddedSource(
 ): Finding[] {
   const extras = options.extras !== false;
   const noSilencing = options.noSilencing !== false;
+  const secrets = options.secrets === true;
   const hits: Finding[] = [];
   const sourceLines = sourceText.split('\n');
   for (const lineNumber of addedLines) {
     const line = sourceLines[lineNumber - 1] ?? '';
     const commentText = commentTextOfLine(line);
-    if (!commentText || !SUPPRESSION_RE.test(commentText)) {
+    const suppression = commentText ? suppressionKind(commentText, secrets) : undefined;
+    if (suppression === undefined) {
       continue;
     }
+    const message = suppressionMessage(suppression, line);
     if (extras) {
-      push(hits, filePath, lineNumber, 'suppression', line.trim());
+      push(hits, filePath, lineNumber, 'suppression', message);
     }
     if (noSilencing) {
-      push(hits, filePath, lineNumber, 'no-silencing', line.trim());
+      push(hits, filePath, lineNumber, 'no-silencing', message);
     }
   }
 
@@ -271,6 +295,7 @@ export function runLineChecks(
 ): Result<Finding[]> {
   const extras = options.extras !== false;
   const allowSilencing = options.allowSilencing ?? [];
+  const secrets = options.secrets === true;
   const hits: Finding[] = [];
   for (const [filePath, addedLines] of scope.addedLines) {
     if (addedLines.size === 0) {
@@ -292,6 +317,7 @@ export function runLineChecks(
     hits.push(...scanAddedSource(filePath, sourceText, addedLines, {
       extras: extrasOn,
       noSilencing: noSilencingOn,
+      secrets,
     }));
   }
   return ok(hits);

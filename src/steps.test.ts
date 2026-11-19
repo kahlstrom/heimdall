@@ -1503,6 +1503,56 @@ describe('lineChecksStep', () => {
     ).toBe(false);
   });
 
+  it('flags a new secretlint-disable only when secrets is enabled', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-lines-secrets-'));
+    try {
+      fs.mkdirSync(path.join(dir, 'src'));
+      fs.writeFileSync(path.join(dir, 'src/a.ts'), "const token = 'leaked-value'; // secretlint-disable-line\n");
+      const scope: DiffScope = {
+        baseRef: 'main',
+        mergeBaseSha: 'a',
+        changedFiles: new Set(['src/a.ts']),
+        addedLines: new Map([['src/a.ts', new Set([1])]]),
+      };
+      const secretsOn = await lineChecksStep.run(
+        ctx({
+          cwd: dir,
+          config: cfg({ steps: { secrets: { command: 'secretlint --format json "**/*"' } } }),
+          scope,
+          runCommand: async () => result({ exitCode: 0 }),
+        }),
+      );
+      expect(secretsOn.kind).toBe('fail');
+      if (secretsOn.kind === 'fail') {
+        expect(secretsOn.findings).toEqual([
+          {
+            step: 'line-checks',
+            file: 'src/a.ts',
+            line: 1,
+            rule: 'no-silencing',
+            message: 'secretlint-disable',
+          },
+        ]);
+        const finding = secretsOn.findings[0];
+        expect(finding).toBeDefined();
+        if (finding !== undefined) {
+          expect(formatFinding(finding)).toBe('src/a.ts:1 [no-silencing] secretlint-disable');
+        }
+      }
+      const secretsOff = await lineChecksStep.run(
+        ctx({
+          cwd: dir,
+          config: cfg({ steps: { tests: { command: 't' } } }),
+          scope,
+          runCommand: async () => result({ exitCode: 0 }),
+        }),
+      );
+      expect(secretsOff.kind).toBe('pass');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('is a GATE ERROR when a changed source file cannot be read', async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-lines-step-'));
     try {
