@@ -416,6 +416,84 @@ function secretlintMessageLine(message: Record<string, unknown>): number {
 }
 
 /**
+ * dependency-cruiser `--output-type json` (pinned 18.x):
+ * `{ summary: { violations: [{ from, to, rule: { name, severity }, cycle? }] } }`.
+ * Only `severity: "error"` counts. Cycle findings use the cycle path; others
+ * use `from -> to`. Identity is rule + from + to (+ cycle), not line numbers.
+ *
+ * 18.x `cycle` is `IMiniDependency[]` (`{ name, dependencyTypes }`); string
+ * entries are accepted so a fixture can pin just the path.
+ */
+export function parseArchitectureOutput(output: string): Result<Finding[]> {
+  const json = extractJson(output);
+  if (!json.ok) {
+    return err(`architecture output is not JSON: ${json.error}`);
+  }
+  return parseArchitectureJson(json.value);
+}
+
+export function parseArchitectureJson(value: unknown): Result<Finding[]> {
+  if (!isRecord(value) || !isRecord(value.summary) || !Array.isArray(value.summary.violations)) {
+    return err('architecture JSON must be an object with summary.violations[]');
+  }
+  const findings: Finding[] = [];
+  for (const entry of value.summary.violations) {
+    if (!isRecord(entry) || !isRecord(entry.rule)) {
+      continue;
+    }
+    if (asString(entry.rule.severity, '') !== 'error') {
+      continue;
+    }
+    const from = asString(entry.from, '');
+    const to = asString(entry.to, '');
+    const rule = asString(entry.rule.name, '');
+    if (!from || !to || !rule) {
+      continue;
+    }
+    findings.push(
+      finding('architecture', from, 0, rule, architectureFindingMessage(from, to, architectureCycleNames(entry.cycle))),
+    );
+  }
+  return ok(findings);
+}
+
+function architectureCycleNames(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value) || value.length === 0) {
+    return undefined;
+  }
+  const names: string[] = [];
+  for (const item of value) {
+    if (typeof item === 'string' && item) {
+      names.push(item);
+      continue;
+    }
+    if (isRecord(item)) {
+      const name = asString(item.name, '');
+      if (name) {
+        names.push(name);
+      }
+    }
+  }
+  return names.length > 0 ? names : undefined;
+}
+
+/**
+ * Cycle path is the reported finding (and the identity's extra key). Regular
+ * violations use `from -> to` so two edges of the same rule stay distinct.
+ */
+function architectureFindingMessage(
+  from: string,
+  to: string,
+  cycle: readonly string[] | undefined,
+): string {
+  if (cycle === undefined || cycle.length === 0) {
+    return `${from} -> ${to}`;
+  }
+  const names = cycle[0] === from ? cycle : [from, ...cycle];
+  return names.join(' -> ');
+}
+
+/**
  * tsc pretty and `file(line,col): error TSxxxx:` formats.
  */
 export function parseTypecheckOutput(output: string): Result<Finding[]> {

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { runCommand } from './command.js';
 import {
+  architectureStep,
   eslintStep,
   findingsAtMergeBase,
   jscpdStep,
@@ -1254,6 +1255,248 @@ describe('knipStep', () => {
           step.findings.some((hit) => hit.rule === 'exports' && hit.message === 'helper' && hit.file.includes('lib')),
         ).toBe(true);
         expect(step.findings.some((hit) => hit.message === 'leftover')).toBe(false);
+      }
+    });
+  });
+});
+
+const ARCHITECTURE_COMMAND = 'depcruise src --output-type json';
+
+function architectureViolation(
+  from: string,
+  to: string,
+  rule: string,
+  severity: 'error' | 'warn' | 'info',
+  cycle?: readonly unknown[],
+): Record<string, unknown> {
+  if (cycle === undefined) {
+    return { from, to, rule: { name: rule, severity } };
+  }
+  return { from, to, rule: { name: rule, severity }, cycle };
+}
+
+function architectureReport(violations: readonly unknown[]): string {
+  return JSON.stringify({ summary: { violations } });
+}
+
+function architectureTwoShot(current: string, base: string): StepContext['runCommand'] {
+  return async (...args: Parameters<StepContext['runCommand']>) => {
+    const cwd = args[1];
+    if (cwd.includes('architecture-base')) {
+      return result({ exitCode: 1, stdout: base });
+    }
+    return result({ exitCode: 1, stdout: current });
+  };
+}
+
+async function withArchitectureRepo(
+  fn: (args: { repo: string; tmpDir: string; mergeBaseSha: string; scope: DiffScope }) => Promise<void>,
+): Promise<void> {
+  await withTempRepo(async (repo) => {
+    writeRepoFile(repo, 'src/a.ts', 'export const a = 1;\n');
+    commitAll(repo, 'base');
+    const mergeBaseSha = git(repo, ['rev-parse', 'HEAD']).trim();
+    git(repo, ['checkout', '-q', '-b', 'feat']);
+    writeRepoFile(repo, 'src/b.ts', "import { a } from './a.js';\nexport const b = a;\n");
+    commitAll(repo, 'feat');
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-architecture-step-'));
+    try {
+      const scope: DiffScope = {
+        baseRef: 'main',
+        mergeBaseSha,
+        changedFiles: new Set(['src/b.ts']),
+        addedLines: new Map([['src/b.ts', new Set([1, 2])]]),
+      };
+      await fn({ repo, tmpDir, mergeBaseSha, scope });
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+}
+
+describe('architectureStep', () => {
+  it('is off unless the repo config enables it with a command', () => {
+    expect(architectureStep.isEnabled(cfg({ steps: { tests: { command: 't' } } }))).toBe(false);
+    expect(
+      architectureStep.isEnabled(cfg({ steps: { tests: { command: 't' }, architecture: { enabled: false } } })),
+    ).toBe(false);
+    expect(
+      architectureStep.isEnabled(cfg({ steps: { architecture: { command: ARCHITECTURE_COMMAND } } })),
+    ).toBe(true);
+  });
+
+  it('is a GATE ERROR when output is not JSON', async () => {
+    const step = await architectureStep.run(
+      ctx({
+        config: cfg({ steps: { architecture: { command: ARCHITECTURE_COMMAND } } }),
+        runCommand: async () => result({ exitCode: 1, stdout: "ERROR: Can't open .dependency-cruiser.js" }),
+      }),
+    );
+    expect(step.kind).toBe('error');
+    if (step.kind === 'error') {
+      expect(step.reason).toMatch(/not JSON/);
+    }
+  });
+
+  it('is a GATE ERROR when the command is missing (exit 127)', async () => {
+    const step = await architectureStep.run(
+      ctx({
+        config: cfg({ steps: { architecture: { command: ARCHITECTURE_COMMAND } } }),
+        runCommand: async () => result({ exitCode: 127, stderr: 'command not found' }),
+      }),
+    );
+    expect(step.kind).toBe('error');
+    if (step.kind === 'error') {
+      expect(step.reason).toBe(
+        'architecture: command not found (exit 127); install the tool or fix steps.architecture.command',
+      );
+    }
+  });
+
+  it('is a GATE ERROR when dependency-cruiser errors out with no error violations', async () => {
+    const step = await architectureStep.run(
+      ctx({
+        config: cfg({ steps: { architecture: { command: ARCHITECTURE_COMMAND } } }),
+        runCommand: async () =>
+          result({
+            exitCode: 1,
+            stdout: architectureReport([]),
+            stderr: "ERROR: The rules file '.dependency-cruiser.js' is empty",
+          }),
+      }),
+    );
+    expect(step.kind).toBe('error');
+    if (step.kind === 'error') {
+      expect(step.reason).toMatch(/without parseable findings/);
+    }
+  });
+
+  it('skips the baseline run when the branch has no error violations', async () => {
+    let calls = 0;
+    const step = await architectureStep.run(
+      ctx({
+        config: cfg({ steps: { architecture: { command: ARCHITECTURE_COMMAND } } }),
+        runCommand: async () => {
+          calls += 1;
+          return result({
+            exitCode: 0,
+            stdout: architectureReport([
+              architectureViolation('src/a.ts', 'src/legacy.ts', 'no-legacy', 'warn'),
+            ]),
+          });
+        },
+      }),
+    );
+    expect(step.kind).toBe('pass');
+    expect(calls).toBe(1);
+  });
+
+  it('fails on a new error-severity violation', async () => {
+    await withArchitectureRepo(async ({ repo, tmpDir, scope }) => {
+      const current = architectureReport([
+        architectureViolation('src/a.ts', 'src/forbidden.ts', 'not-to-unallowed', 'error'),
+        architectureViolation('src/legacy.ts', 'src/old.ts', 'not-to-unallowed', 'error'),
+      ]);
+      const base = architectureReport([
+        architectureViolation('src/legacy.ts', 'src/old.ts', 'not-to-unallowed', 'error'),
+      ]);
+      const step = await architectureStep.run(
+        ctx({
+          cwd: repo,
+          tmpDir,
+          scope,
+          config: cfg({ steps: { architecture: { command: ARCHITECTURE_COMMAND } } }),
+          runCommand: architectureTwoShot(current, base),
+        }),
+      );
+      expect(step.kind).toBe('fail');
+      if (step.kind === 'fail') {
+        expect(step.findings.map(formatFinding)).toEqual([
+          '[not-to-unallowed] src/a.ts -> src/forbidden.ts',
+        ]);
+      }
+    });
+  });
+
+  it('passes when the only error violations already existed at the merge-base', async () => {
+    await withArchitectureRepo(async ({ repo, tmpDir, scope }) => {
+      const report = architectureReport([
+        architectureViolation('src/legacy.ts', 'src/old.ts', 'not-to-unallowed', 'error'),
+      ]);
+      const step = await architectureStep.run(
+        ctx({
+          cwd: repo,
+          tmpDir,
+          scope,
+          config: cfg({ steps: { architecture: { command: ARCHITECTURE_COMMAND } } }),
+          runCommand: architectureTwoShot(report, report),
+        }),
+      );
+      expect(step.kind).toBe('pass');
+    });
+  });
+
+  it('fails on a new circular dependency and reports the cycle path', async () => {
+    await withArchitectureRepo(async ({ repo, tmpDir, scope }) => {
+      const current = architectureReport([
+        architectureViolation('src/a.ts', 'src/b.ts', 'no-circular', 'error', [
+          { name: 'src/b.ts', dependencyTypes: ['local'] },
+          { name: 'src/a.ts', dependencyTypes: ['local'] },
+        ]),
+      ]);
+      const base = architectureReport([]);
+      const step = await architectureStep.run(
+        ctx({
+          cwd: repo,
+          tmpDir,
+          scope,
+          config: cfg({ steps: { architecture: { command: ARCHITECTURE_COMMAND } } }),
+          runCommand: architectureTwoShot(current, base),
+        }),
+      );
+      expect(step.kind).toBe('fail');
+      if (step.kind === 'fail') {
+        expect(step.findings).toEqual([
+          {
+            step: 'architecture',
+            file: 'src/a.ts',
+            line: 0,
+            rule: 'no-circular',
+            message: 'src/a.ts -> src/b.ts -> src/a.ts',
+          },
+        ]);
+        expect(step.findings.map(formatFinding)).toEqual([
+          '[no-circular] src/a.ts -> src/b.ts -> src/a.ts',
+        ]);
+      }
+    });
+  });
+
+  it('is a GATE ERROR when the architecture baseline command is missing (exit 127)', async () => {
+    await withArchitectureRepo(async ({ repo, tmpDir, scope }) => {
+      const current = architectureReport([
+        architectureViolation('src/a.ts', 'src/forbidden.ts', 'not-to-unallowed', 'error'),
+      ]);
+      const step = await architectureStep.run(
+        ctx({
+          cwd: repo,
+          tmpDir,
+          scope,
+          config: cfg({ steps: { architecture: { command: ARCHITECTURE_COMMAND } } }),
+          runCommand: async (...args: Parameters<StepContext['runCommand']>) => {
+            const cwd = args[1];
+            if (cwd.includes('architecture-base')) {
+              return result({ exitCode: 127, stderr: 'command not found' });
+            }
+            return result({ exitCode: 1, stdout: current });
+          },
+        }),
+      );
+      expect(step.kind).toBe('error');
+      if (step.kind === 'error') {
+        expect(step.reason).toMatch(
+          /architecture: command not found \(exit 127\); install the tool or fix steps\.architecture\.command/,
+        );
       }
     });
   });

@@ -23,6 +23,10 @@ export function formatFinding(finding: Finding): string {
   if (finding.step === 'secrets' || finding.message === '') {
     return `${finding.file}:${finding.line} [${finding.rule}]`;
   }
+  // Architecture findings are graph edges, not line hits.
+  if (finding.step === 'architecture') {
+    return `[${finding.rule}] ${finding.message}`;
+  }
   return `${finding.file}:${finding.line} [${finding.rule}] ${finding.message}`;
 }
 

@@ -8,6 +8,8 @@ import {
   writeKnipAllIssuesFixture,
 } from '../test/helpers/knip-all-issues.js';
 import {
+  parseArchitectureJson,
+  parseArchitectureOutput,
   parseEslintOutput,
   parseJscpdJson,
   parseKnipJson,
@@ -344,6 +346,111 @@ describe('parseSecretsOutput', () => {
       expect(parsed.value).toEqual([
         { step: 'secrets', file: 'b.ts', line: 2, rule: 'keep-me', message: '' },
       ]);
+    }
+  });
+});
+
+function architectureHit(from: string, rule: string, message: string) {
+  return { step: 'architecture' as const, file: from, line: 0, rule, message };
+}
+
+function architectureCruise(violations: readonly unknown[]): unknown {
+  return { summary: { violations } };
+}
+
+describe('parseArchitectureOutput', () => {
+  it('parses error-severity edges as rule plus from -> to and ignores warnings', () => {
+    const parsed = parseArchitectureOutput(
+      JSON.stringify(
+        architectureCruise([
+          {
+            type: 'dependency',
+            from: 'src/a.ts',
+            to: 'src/forbidden.ts',
+            rule: { name: 'not-to-unallowed', severity: 'error' },
+          },
+          {
+            type: 'dependency',
+            from: 'src/a.ts',
+            to: 'src/legacy.ts',
+            rule: { name: 'no-legacy', severity: 'warn' },
+          },
+          {
+            type: 'module',
+            from: 'src/orphan.ts',
+            to: 'src/orphan.ts',
+            rule: { name: 'no-orphans', severity: 'info' },
+          },
+        ]),
+      ),
+    );
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.value).toEqual([
+        architectureHit('src/a.ts', 'not-to-unallowed', 'src/a.ts -> src/forbidden.ts'),
+      ]);
+    }
+  });
+
+  it('reports a cycle path from 18.x IMiniDependency entries', () => {
+    const parsed = parseArchitectureJson(
+      architectureCruise([
+        {
+          type: 'cycle',
+          from: 'src/a.ts',
+          to: 'src/b.ts',
+          rule: { name: 'no-circular', severity: 'error' },
+          cycle: [
+            { name: 'src/b.ts', dependencyTypes: ['local'] },
+            { name: 'src/a.ts', dependencyTypes: ['local'] },
+          ],
+        },
+      ]),
+    );
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.value).toEqual([
+        architectureHit('src/a.ts', 'no-circular', 'src/a.ts -> src/b.ts -> src/a.ts'),
+      ]);
+    }
+  });
+
+  it('parses JSON wrapped in yarn noise', () => {
+    const parsed = parseArchitectureOutput(
+      'yarn run v1.22.22\n{"summary":{"violations":[{"from":"a.ts","to":"b.ts","rule":{"name":"x","severity":"error"}}]}}\nDone in 0.1s.',
+    );
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.value[0]?.message).toBe('a.ts -> b.ts');
+      expect(parsed.value[0]?.rule).toBe('x');
+    }
+  });
+
+  it('errors on malformed non-JSON output', () => {
+    const parsed = parseArchitectureOutput('ERROR: Can\'t open .dependency-cruiser.js');
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.error).toMatch(/not JSON/);
+    }
+  });
+
+  it('rejects JSON that is not a cruise result with summary.violations[]', () => {
+    expect(parseArchitectureOutput('{"modules":[]}').ok).toBe(false);
+    expect(parseArchitectureOutput('[]').ok).toBe(false);
+    expect(parseArchitectureJson({ summary: {} }).ok).toBe(false);
+  });
+
+  it('skips malformed violation rows and keeps valid error findings', () => {
+    const parsed = parseArchitectureJson(
+      architectureCruise([
+        null,
+        { from: 'src/a.ts' },
+        { from: 'src/a.ts', to: 'src/b.ts', rule: { name: 'keep-me', severity: 'error' } },
+      ]),
+    );
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.value).toEqual([architectureHit('src/a.ts', 'keep-me', 'src/a.ts -> src/b.ts')]);
     }
   });
 });

@@ -70,13 +70,15 @@ describe('heimdall.config.json', () => {
     for (const name of COMMAND_STEP_NAMES) {
       const command = own.value.steps[name]?.command;
       if (command === undefined) {
-        expect(name).toBe('secrets');
+        expect(['secrets', 'architecture']).toContain(name);
         continue;
       }
       expect(command).toContain('npx --no-install');
     }
     expect(own.value.steps.secrets).toBeUndefined();
     expect(example.value.steps.secrets).toBeUndefined();
+    expect(own.value.steps.architecture).toBeUndefined();
+    expect(example.value.steps.architecture).toBeUndefined();
     expect(own.value.steps.jscpd?.command).toBe(example.value.steps.jscpd?.command);
     expect(own.value.steps.knip?.command).toContain('--production');
   });
@@ -385,6 +387,27 @@ describe('parseGateConfig', () => {
     expect(missingCommand.ok).toBe(false);
     if (!missingCommand.ok) {
       expect(missingCommand.error).toMatch(/steps\.secrets\.command/);
+    }
+  });
+
+  it('leaves architecture off when omitted and requires a command when enabled', () => {
+    const omitted = parseGateConfig({ steps: { tests: { command: 't' } } }, 'x');
+    expect(omitted.ok).toBe(true);
+    if (omitted.ok) {
+      expect(omitted.value.steps.architecture).toBeUndefined();
+    }
+    const enabled = parseGateConfig({
+      steps: { architecture: { command: 'depcruise src --output-type json' } },
+    }, 'x');
+    expect(enabled.ok).toBe(true);
+    if (enabled.ok) {
+      expect(enabled.value.steps.architecture?.enabled).toBe(true);
+      expect(enabled.value.steps.architecture?.command).toBe('depcruise src --output-type json');
+    }
+    const missingCommand = parseGateConfig({ steps: { architecture: { enabled: true } } }, 'x');
+    expect(missingCommand.ok).toBe(false);
+    if (!missingCommand.ok) {
+      expect(missingCommand.error).toMatch(/steps\.architecture\.command/);
     }
   });
 });

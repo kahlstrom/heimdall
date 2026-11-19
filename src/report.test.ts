@@ -27,6 +27,18 @@ describe('formatFinding', () => {
     ).toBe('src/secret.ts [protected-path] this path is off-limits');
   });
 
+  it('prints architecture findings as rule plus from -> to without a line number', () => {
+    expect(
+      formatFinding({
+        step: 'architecture',
+        file: 'src/a.ts',
+        line: 0,
+        rule: 'not-to-unallowed',
+        message: 'src/a.ts -> src/forbidden.ts',
+      }),
+    ).toBe('[not-to-unallowed] src/a.ts -> src/forbidden.ts');
+  });
+
   it('prints secrets findings as file:line [rule] with no message text', () => {
     expect(
       formatFinding({

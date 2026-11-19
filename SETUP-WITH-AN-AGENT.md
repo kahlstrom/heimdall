@@ -44,9 +44,9 @@ Follow these for the whole setup, even if a step seems to need otherwise:
   broken.
 - It compares the working tree (including uncommitted and untracked files) to
   the merge-base of a base ref and fails only on **new** problems. Lint, secrets,
-  and jscpd findings are limited to changed files and lines; knip fails only on
-  findings that are not present at the merge-base. Tests and typecheck run in
-  full. Built-in `line-checks` look only at added lines.
+  and jscpd findings are limited to changed files and lines; knip and architecture
+  fail only on findings that are not present at the merge-base. Tests and
+  typecheck run in full. Built-in `line-checks` look only at added lines.
 - Each repo needs a `heimdall.config.json` that lists the commands to run.
 
 ## Step 1: Check prerequisites and install
@@ -168,6 +168,7 @@ lockfile). Work out the **real** commands for each Heimdall step:
 | `eslint` | the repo has ESLint configured | `npx --no-install eslint . -f json` |
 | `knip` | the repo has knip installed | `npx --no-install knip --reporter json --no-progress` |
 | `jscpd` | the repo has jscpd installed | `npx --no-install jscpd src --reporters json --silent --output "$HEIMDALL_TMP" && cat "$HEIMDALL_TMP/jscpd-report.json"` |
+| `architecture` | the repo has dependency-cruiser installed | `npx --no-install depcruise src --output-type json` |
 | `line-checks` | always available, built in | omit it (no-silencing stays on) or set `true` for the stricter extras |
 
 Rules for this step:
@@ -179,9 +180,9 @@ Rules for this step:
   silent download.
 - Use the JSON reporters shown above. Heimdall parses tool output, and
   unparseable output from a failing command is a GATE ERROR.
-- **Ask before adding a tool the repo does not have** (for example knip or
-  jscpd). Adding one changes the project's dependencies, so it needs the
-  user's OK under the hard rules.
+- **Ask before adding a tool the repo does not have** (for example knip,
+  jscpd, or dependency-cruiser). Adding one changes the project's
+  dependencies, so it needs the user's OK under the hard rules.
 - **Ask which folders to protect.** Anything listed in `protectedPaths`
   (globs such as `"src/generated/**"` or `"migrations/**"`) turns RED if a
   change touches it. Leave it empty if the user has none.
@@ -234,7 +235,7 @@ Then:
 
 - **GREEN:** report it with the summary pasted exactly.
 - **RED:** paste the findings and summary exactly, then explain them. Lint,
-  jscpd, knip and line-checks only count **new** problems versus the
+  jscpd, knip, architecture and line-checks only count **new** problems versus the
   merge-base, so on a branch with no changes those should be quiet. Tests and
   typecheck run in full, so failures that already exist on the base branch
   will show here. Tell the user what is failing and ask what they want to do.

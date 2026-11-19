@@ -446,6 +446,7 @@ export function parseGateConfig(raw: unknown, configPath: string): Result<GateCo
     knip: CommandStepConfig | undefined;
     jscpd: CommandStepConfig | undefined;
     secrets: CommandStepConfig | undefined;
+    architecture: CommandStepConfig | undefined;
   } = {
     typecheck: undefined,
     tests: undefined,
@@ -453,6 +454,7 @@ export function parseGateConfig(raw: unknown, configPath: string): Result<GateCo
     knip: undefined,
     jscpd: undefined,
     secrets: undefined,
+    architecture: undefined,
   };
 
   for (const name of COMMAND_STEP_NAMES) {

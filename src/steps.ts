@@ -10,6 +10,7 @@ import { classifyFailedTests, parseTestRun } from './flakes.js';
 import { extractJson } from './json.js';
 import { runLineChecks } from './line-checks.js';
 import {
+  parseArchitectureOutput,
   parseEslintOutput,
   parseJscpdOutput,
   parseKnipOutput,
@@ -145,6 +146,27 @@ function toolFailedWithoutFindings(
   };
 }
 
+/**
+ * Run a configured command and parse findings. Callers decide how to read
+ * stdout (knip uses stdout; jscpd may fall back to a report file).
+ */
+async function runAndParseFindings(
+  ctx: StepContext,
+  name: CommandStepName,
+  parse: (output: string) => Result<Finding[]>,
+  stdoutOf: (result: CommandResult) => string = (result) => result.stdout,
+): Promise<{ command: string; result: CommandResult; findings: Finding[] } | StepResult> {
+  const ran = await runConfigured(ctx, name);
+  if (!('result' in ran)) {
+    return ran;
+  }
+  const parsed = parseOrError(name, parse(stdoutOf(ran.result)), ran.result);
+  if (!Array.isArray(parsed)) {
+    return parsed;
+  }
+  return { command: ran.command, result: ran.result, findings: parsed };
+}
+
 function jsonToolStep(
   name: Extract<CommandStepName, 'jscpd'>,
   parse: (output: string) => Result<Finding[]>,
@@ -153,24 +175,18 @@ function jsonToolStep(
   const step: GateStep = {
     name,
     scopeToDiff: true,
-    isEnabled(config) {
-      return config.steps[name]?.enabled === true;
-    },
+    isEnabled: (config) => config.steps[name]?.enabled === true,
     async run(ctx) {
-      const ran = await runConfigured(ctx, name);
-      if (!('result' in ran)) {
+      const reportFile = reportFileName === undefined ? undefined : path.join(ctx.tmpDir, reportFileName);
+      const ran = await runAndParseFindings(ctx, name, parse, (result) => jsonStdout(result, reportFile));
+      if (!('command' in ran)) {
         return ran;
       }
-      const reportFile = reportFileName === undefined ? undefined : path.join(ctx.tmpDir, reportFileName);
-      const parsed = parseOrError(name, parse(jsonStdout(ran.result, reportFile)), ran.result);
-      if (!Array.isArray(parsed)) {
-        return parsed;
-      }
-      const scoped = scopedOrPass(step, parsed, ctx);
+      const scoped = scopedOrPass(step, ran.findings, ctx);
       if (scoped.kind !== 'pass') {
         return scoped;
       }
-      if (ran.result.exitCode === 0 || parsed.length > 0) {
+      if (ran.result.exitCode === 0 || ran.findings.length > 0) {
         return { kind: 'pass', name };
       }
       return toolFailedWithoutFindings(name, ran.command, ran.result);
@@ -303,47 +319,53 @@ export const eslintStep: GateStep = {
   },
 };
 
-export const knipStep: GateStep = {
-  name: 'knip',
-  scopeToDiff: false,
-  isEnabled(config) {
-    return config.steps.knip?.enabled === true;
-  },
-  async run(ctx) {
-    const ran = await runConfigured(ctx, 'knip');
-    if (!('result' in ran)) {
-      return ran;
-    }
-    const parsed = parseOrError('knip', parseKnipOutput(ran.result.stdout), ran.result);
-    if (!Array.isArray(parsed)) {
-      return parsed;
-    }
-    if (parsed.length === 0) {
-      if (ran.result.exitCode === 0) {
-        return { kind: 'pass', name: 'knip' };
+/**
+ * Whole-project JSON tools that fail only on findings new versus the merge-base.
+ * Skip the baseline run when the branch result is empty (knip, architecture).
+ */
+function newVsBaseCommandStep(
+  name: CommandStepName,
+  parse: (output: string) => Result<Finding[]>,
+): GateStep {
+  return {
+    name,
+    scopeToDiff: false,
+    isEnabled: (config) => config.steps[name]?.enabled === true,
+    async run(ctx) {
+      const ran = await runAndParseFindings(ctx, name, parse);
+      if (!('command' in ran)) {
+        return ran;
       }
-      return toolFailedWithoutFindings('knip', ran.command, ran.result);
-    }
+      if (ran.findings.length === 0) {
+        if (ran.result.exitCode === 0) {
+          return { kind: 'pass', name };
+        }
+        return toolFailedWithoutFindings(name, ran.command, ran.result);
+      }
 
-    const baseFindings = await findingsAtMergeBase(ctx, 'knip', ran.command, parseKnipOutput);
-    if (!Array.isArray(baseFindings)) {
-      return baseFindings;
-    }
-    const findings = findingsNotInBase(parsed, baseFindings);
-    if (findings.length === 0) {
-      return { kind: 'pass', name: 'knip' };
-    }
-    return { kind: 'fail', name: 'knip', findings };
-  },
-};
+      const baseFindings = await findingsAtMergeBase(ctx, name, ran.command, parse);
+      if (!Array.isArray(baseFindings)) {
+        return baseFindings;
+      }
+      const findings = findingsNotInBase(ran.findings, baseFindings);
+      if (findings.length === 0) {
+        return { kind: 'pass', name };
+      }
+      return { kind: 'fail', name, findings };
+    },
+  };
+}
+
+export const knipStep: GateStep = newVsBaseCommandStep('knip', parseKnipOutput);
 
 /**
  * Materialize the merge-base under HEIMDALL_TMP (itself under os.tmpdir), run
  * `command` there, and parse findings. The copy is removed afterwards; the
  * runner's teardown still deletes HEIMDALL_TMP on abort, timeout, or crash.
  *
- * Step-agnostic on purpose: knip (and later steps) pass their name and parser.
- * Pair with findingsNotInBase to keep only findings that are new versus base.
+ * Step-agnostic on purpose: knip, architecture, and later steps pass their name
+ * and parser. Pair with findingsNotInBase to keep only findings that are new
+ * versus base.
  */
 export async function findingsAtMergeBase(
   ctx: StepContext,
@@ -457,6 +479,14 @@ function shareNodeModules(fromRepo: string, dest: string): Result<void> {
 export const jscpdStep: GateStep = jsonToolStep('jscpd', parseJscpdOutput, 'jscpd-report.json');
 
 /**
+ * dependency-cruiser JSON (`--output-type json`, 18.x). Fails only on
+ * error-severity violations that are new versus the merge-base. Off unless a
+ * repo enables it with a command — no default command, rules file, or tool
+ * path. Skip the baseline run when the branch has no error violations.
+ */
+export const architectureStep: GateStep = newVsBaseCommandStep('architecture', parseArchitectureOutput);
+
+/**
  * secretlint JSON, scoped to added lines the same way eslint is. Findings
  * carry rule id, file, and line only — never secretlint's message text.
  */
@@ -523,5 +553,6 @@ export const STEPS: readonly GateStep[] = [
   knipStep,
   jscpdStep,
   secretsStep,
+  architectureStep,
   lineChecksStep,
 ];
