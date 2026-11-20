@@ -634,6 +634,85 @@ describe('eslintStep', () => {
     });
   });
 
+  it('fails a complexity finding whose measured value rose on an unchanged line', async () => {
+    await withEslintRepo(async ({ repo, tmpDir, scope }) => {
+      const file = path.join(repo, 'src/old.ts');
+      const current = JSON.stringify([
+        {
+          filePath: file,
+          messages: [
+            {
+              line: 1,
+              ruleId: 'complexity',
+              messageId: 'complex',
+              message: 'Function has a complexity of 20. Maximum allowed is 10.',
+              severity: 2,
+            },
+          ],
+        },
+      ]);
+      const base = JSON.stringify([
+        {
+          filePath: file,
+          messages: [
+            {
+              line: 1,
+              ruleId: 'complexity',
+              messageId: 'complex',
+              message: 'Function has a complexity of 15. Maximum allowed is 10.',
+              severity: 2,
+            },
+          ],
+        },
+      ]);
+      const step = await eslintStep.run(
+        ctx({
+          cwd: repo,
+          tmpDir,
+          scope,
+          config: cfg({ steps: { eslint: { command: 'npx eslint -f json' } } }),
+          runCommand: eslintTwoShot(current, base),
+        }),
+      );
+      expect(step.kind).toBe('fail');
+      if (step.kind === 'fail') {
+        expect(step.findings.map(formatFinding)).toEqual([
+          `${file}:1 [complexity] Function has a complexity of 20. Maximum allowed is 10.`,
+        ]);
+      }
+    });
+  });
+
+  it('passes a complexity finding whose measured value is unchanged', async () => {
+    await withEslintRepo(async ({ repo, tmpDir, scope }) => {
+      const file = path.join(repo, 'src/old.ts');
+      const report = JSON.stringify([
+        {
+          filePath: file,
+          messages: [
+            {
+              line: 1,
+              ruleId: 'complexity',
+              messageId: 'complex',
+              message: 'Function has a complexity of 15. Maximum allowed is 10.',
+              severity: 2,
+            },
+          ],
+        },
+      ]);
+      const step = await eslintStep.run(
+        ctx({
+          cwd: repo,
+          tmpDir,
+          scope,
+          config: cfg({ steps: { eslint: { command: 'npx eslint -f json' } } }),
+          runCommand: eslintTwoShot(report, report),
+        }),
+      );
+      expect(step.kind).toBe('pass');
+    });
+  });
+
   it('passes a complexity finding whose measured value dropped but stayed over the limit', async () => {
     await withEslintRepo(async ({ repo, tmpDir, scope }) => {
       const file = path.join(repo, 'src/old.ts');
@@ -645,7 +724,7 @@ describe('eslintStep', () => {
               line: 1,
               ruleId: 'complexity',
               messageId: 'complex',
-              message: 'Function has a complexity of 13. Maximum allowed is 10.',
+              message: 'Function has a complexity of 12. Maximum allowed is 10.',
               severity: 2,
             },
           ],

@@ -293,13 +293,13 @@ describe('stableEslintMessage', () => {
   const keyOf = (finding: Finding): string => matchFindingKey(finding, scope, SCOPE_ROOT, stableEslintMessage);
   const eslintHit = (
     message: string,
-    extras: { line?: number; messageId?: string; file?: string } = {},
+    extras: { line?: number; messageId?: string; file?: string; rule?: string } = {},
   ): Finding => {
     const finding: Finding = {
       step: 'eslint',
       file: extras.file ?? 'src/a.ts',
       line: extras.line ?? 1,
-      rule: 'x',
+      rule: extras.rule ?? 'x',
       message,
     };
     if (extras.messageId === undefined) {
@@ -307,6 +307,13 @@ describe('stableEslintMessage', () => {
     }
     return { ...finding, messageId: extras.messageId };
   };
+
+  const complexityHit = (measured: number, line = 1): Finding =>
+    eslintHit(`Function has a complexity of ${measured}. Maximum allowed is 10.`, {
+      rule: 'complexity',
+      messageId: 'complex',
+      line,
+    });
 
   it('normalizes line and column numbers without touching identifier names', () => {
     expect(stableEslintMessage("'x' is already declared in the upper scope on line 4 column 10.")).toBe(
@@ -337,10 +344,66 @@ describe('stableEslintMessage', () => {
     expect(findingsNotInBase(current, base, keyOf)).toEqual([]);
   });
 
-  it('treats a complexity finding as the same when the measured value drops but stays over the limit', () => {
-    const current = [eslintHit('Function has a complexity of 13. Maximum allowed is 10.', { messageId: 'complex' })];
-    const base = [eslintHit('Function has a complexity of 15. Maximum allowed is 10.', { messageId: 'complex' })];
+  it("treats a no-shadow finding as the same when the message says 'on line 42' vs 'on line 43'", () => {
+    const current = [
+      eslintHit("'x' is already declared in the upper scope on line 43.", {
+        rule: 'no-shadow',
+        messageId: 'noShadow',
+      }),
+    ];
+    const base = [
+      eslintHit("'x' is already declared in the upper scope on line 42.", {
+        rule: 'no-shadow',
+        messageId: 'noShadow',
+      }),
+    ];
     expect(findingsNotInBase(current, base, keyOf)).toEqual([]);
+  });
+
+  it('treats a complexity finding as new when the measured value increases', () => {
+    const current = [complexityHit(20)];
+    const base = [complexityHit(15)];
+    expect(findingsNotInBase(current, base, keyOf)).toEqual(current);
+  });
+
+  it('treats a complexity finding as the same when the measured value stays the same or drops', () => {
+    const base = [complexityHit(15)];
+    expect(findingsNotInBase([complexityHit(15)], base, keyOf)).toEqual([]);
+    expect(findingsNotInBase([complexityHit(12)], base, keyOf)).toEqual([]);
+  });
+
+  it('pairs same-key metric findings as a multiset of measured values', () => {
+    const base = [complexityHit(15, 1), complexityHit(30, 2)];
+    const improved = [complexityHit(29, 1), complexityHit(16, 2)];
+    const worse = [complexityHit(31, 1), complexityHit(15, 2)];
+    expect(findingsNotInBase(improved, base, keyOf)).toEqual([]);
+    expect(findingsNotInBase(worse, base, keyOf)).toEqual([worse[0]]);
+  });
+
+  it('still counts a second metric finding as new when the base only has one', () => {
+    const current = [complexityHit(12, 1), complexityHit(12, 2)];
+    const base = [complexityHit(15)];
+    expect(findingsNotInBase(current, base, keyOf)).toEqual([current[1]]);
+  });
+
+  it('does not spend a base slot on a metric finding that got worse', () => {
+    const current = [complexityHit(31, 1), complexityHit(12, 2)];
+    const base = [complexityHit(15)];
+    expect(findingsNotInBase(current, base, keyOf)).toEqual([current[0]]);
+  });
+
+  it('treats a max-params finding as new when the measured value increases', () => {
+    const current = [
+      eslintHit("Function 'fn' has too many parameters (4). Maximum allowed is 3.", {
+        rule: 'max-params',
+      }),
+    ];
+    const base = [
+      eslintHit("Function 'fn' has too many parameters (3). Maximum allowed is 3.", {
+        rule: 'max-params',
+      }),
+    ];
+    expect(findingsNotInBase(current, base, keyOf)).toEqual(current);
   });
 
   it('keeps unused identifiers that differ only by digits distinct', () => {

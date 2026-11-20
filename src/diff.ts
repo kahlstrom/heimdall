@@ -454,11 +454,76 @@ export function identityMessage(message: string): string {
 }
 
 /**
+ * ESLint core rules whose first standalone number is a measured size or
+ * complexity. Matching still uses the digit-stripped key; a leftover is new
+ * when that measured value is higher than every remaining same-key base finding.
+ */
+const ESLINT_METRIC_RULES: ReadonlySet<string> = new Set([
+  'complexity',
+  'max-depth',
+  'max-lines',
+  'max-lines-per-function',
+  'max-nested-callbacks',
+  'max-params',
+  'max-statements',
+]);
+
+/**
  * Digit runs that are not part of an identifier, so `foo2` stays distinct from
  * `foo3` while `on line 4 column 10` and `complexity of 15` collapse.
  */
 export function stableEslintMessage(message: string): string {
   return message.replace(/\b\d+\b/g, '#');
+}
+
+/** First standalone digit run; for ESLint metric rules this is the measured value. */
+function firstStandaloneNumber(message: string): number | undefined {
+  const match = /\b\d+\b/.exec(message);
+  if (match === null) {
+    return undefined;
+  }
+  return Number.parseInt(match[0], 10);
+}
+
+function eslintMetricValue(finding: Finding): number | undefined {
+  if (finding.step !== 'eslint' || !ESLINT_METRIC_RULES.has(finding.rule)) {
+    return undefined;
+  }
+  return firstStandaloneNumber(finding.message);
+}
+
+/** Highest measured value per match key among ESLint metric findings. */
+function highestMetricByKey(
+  findings: readonly Finding[],
+  keyOf: (finding: Finding) => string,
+): Map<string, number> {
+  const highest = new Map<string, number>();
+  for (const finding of findings) {
+    const measured = eslintMetricValue(finding);
+    if (measured === undefined) {
+      continue;
+    }
+    const id = keyOf(finding);
+    const previous = highest.get(id);
+    if (previous === undefined || measured > previous) {
+      highest.set(id, measured);
+    }
+  }
+  return highest;
+}
+
+/** True when a metric leftover is worse than every same-key merge-base value. */
+function exceedsMetricBase(
+  finding: Finding,
+  id: string,
+  highestMetric: ReadonlyMap<string, number>,
+): boolean {
+  const measured = eslintMetricValue(finding);
+  if (measured === undefined) {
+    return false;
+  }
+  const ceiling = highestMetric.get(id);
+  return ceiling !== undefined && measured > ceiling;
 }
 
 /**
@@ -499,7 +564,9 @@ export function matchFindingKey(
 
 /**
  * Findings in `current` with no matching identity in `base`, compared as a
- * multiset: a second identical key is new.
+ * multiset: a second identical key is new. For ESLint core metric rules, a
+ * current finding only matches a remaining same-key base finding whose
+ * measured value (first standalone number) is at least as high.
  */
 export function findingsNotInBase(
   current: readonly Finding[],
@@ -511,9 +578,14 @@ export function findingsNotInBase(
     const id = keyOf(finding);
     remaining.set(id, (remaining.get(id) ?? 0) + 1);
   }
+  const highestMetric = highestMetricByKey(base, keyOf);
   const extra: Finding[] = [];
   for (const finding of current) {
     const id = keyOf(finding);
+    if (exceedsMetricBase(finding, id, highestMetric)) {
+      extra.push(finding);
+      continue;
+    }
     const count = remaining.get(id) ?? 0;
     if (count > 0) {
       remaining.set(id, count - 1);
