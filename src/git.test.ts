@@ -48,7 +48,6 @@ describe('resolveBaseRef', () => {
       expect(resolved.ok).toBe(true);
       if (resolved.ok) {
         expect(resolved.value.spec).toBe('main');
-        expect(resolved.value.headSha).toBe(git(repo, ['rev-parse', 'HEAD']).trim());
       }
     });
   });
@@ -219,6 +218,19 @@ describe('resolveBaseRef', () => {
       expect(resolved.ok).toBe(false);
       if (!resolved.ok) {
         expect(resolved.error).toMatch(/cannot resolve HEAD/);
+      }
+    });
+  });
+
+  it('records the current HEAD as headSha', async () => {
+    await withTempRepo(async (repo) => {
+      writeRepoFile(repo, 'only-head.md', 'seed\n');
+      commitAll(repo, 'seed for headSha');
+      const expectedHead = git(repo, ['rev-parse', 'HEAD']).trim();
+      const resolved = resolveBaseRef(repo, 'main');
+      expect(resolved.ok).toBe(true);
+      if (resolved.ok) {
+        expect(resolved.value.headSha).toBe(expectedHead);
       }
     });
   });

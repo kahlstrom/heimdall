@@ -688,6 +688,7 @@ describe('loadDiffScope', () => {
         sha: 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
         mergeBaseSha: 'not-a-real-sha',
         source: 'config',
+        headSha: 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
       });
       expect(scope.ok).toBe(false);
       if (!scope.ok) {
