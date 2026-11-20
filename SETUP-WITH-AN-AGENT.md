@@ -306,7 +306,10 @@ rounds):
 4. **Repeat** from step 2 until the leftover findings are real dead
    code, for at most about 5 rounds. Then stop, keep the sibling
    `knip.json`, and report what is still flagged (the real dead code, plus
-   anything you could not classify).
+   anything you could not classify). Keep a list of every `knip.json`
+   addition (each `entry`, `workspaces` row, `ignore` path, and disabled
+   plugin) with a one-line reason, plus the count of leftover dead-code
+   findings. The Step 6 report needs both.
 
 **Hard rules for this loop:**
 
@@ -373,6 +376,16 @@ Then:
 
 An empty diff against the base prints a WARNING in the summary. That is
 expected on a clean branch and is not a failure.
+
+**Prove the setup is clean before you finish.** After the config and
+sibling `knip.json` are in place, run `heimdall` from the project root
+on a branch with **no changes** versus the base (clean working tree, no
+uncommitted or untracked files). Confirm **GREEN**. A **RED** or
+**GATE ERROR** on that run means the setup is not done — fix the config
+or `knip.json` and re-run; do not finish. Existing knip dead-code
+findings (the baseline) do not fail Heimdall: only **new** findings
+count. Tests and typecheck still run in full. The empty-diff WARNING
+above is expected on this run and is not a failure.
 
 ## Step 5: Offer the agent rule
 
@@ -462,6 +475,9 @@ memory, wherever it keeps rules that apply to every coding task.
 
 ## Step 6: Report back
 
+Do not finish until the no-change Heimdall run in Step 4 was **GREEN**.
+A **RED** or **GATE ERROR** there means the setup is not done.
+
 Finish with one block per repo, then a short list of anything left for the
 user to decide:
 
@@ -471,13 +487,21 @@ Config:      $HEIMDALL_HOME/my-app/heimdall.config.json (committed: yes/no)
 Steps:       typecheck, tests, eslint, knip, jscpd, line-checks (knip, jscpd: $HEIMDALL_HOME/node_modules/.bin)
 Protected:   src/generated/** (or: none)
 Setup:       none (or: the setup/teardown commands)
-Result:      GREEN / RED / GATE ERROR
+Result:      GREEN (no-change branch; RED or GATE ERROR means setup is not done)
 Rule:        Cursor global rule (or: CLAUDE.md in repo, not committed; none)
 Changes in this repo: none (or: exactly what was changed, with the user's OK)
+knip.json additions (each with a one-line reason):
+  entry: src/cli.ts — package.json bin
+  workspaces["packages/ui"].entry: src/index.ts — package main
+  ignore: src/generated/** — codegen output
+  "<plugin>": false — plugin misfires on this repo
+  (or: none — starter matched the repo)
+knip baseline: 12 existing dead-code findings (these do not fail Heimdall; only new findings count)
 knip leftover: none (or: the real dead code still reported, listed; never hidden)
 
 <HEIMDALL SUMMARY block pasted exactly>
 ```
 
 For a RED or GATE ERROR, add the findings or the full error, exactly as
-printed, and what you suggest doing next.
+printed, and what you suggest doing next. If that result came from the
+no-change setup-proof run, the setup is not done.

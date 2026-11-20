@@ -167,6 +167,36 @@ describe('SETUP-WITH-AN-AGENT.md', () => {
     expect(guide).toMatch(/Ask the user only about findings you cannot classify/);
     expect(guide).not.toMatch(/\/Users\/ken|\/Users\/\w+|Info\//);
   });
+
+  it('finishes with knip.json additions, a baseline count, and a no-change GREEN proof', () => {
+    const guide = fs.readFileSync(SETUP_GUIDE_PATH, 'utf8');
+    expect(guide).toMatch(/knip\.json additions \(each with a one-line reason\)/);
+    expect(guide).toMatch(/entry: src\/cli\.ts/);
+    expect(guide).toMatch(/workspaces\["packages\/ui"\]\.entry:/);
+    expect(guide).toMatch(/ignore: src\/generated\/\*\*/);
+    expect(guide).toContain('"<plugin>": false');
+    expect(guide).toMatch(
+      /knip baseline: \d+ existing dead-code findings \(these do not fail Heimdall; only new findings count\)/,
+    );
+    expect(guide).toMatch(
+      /run `heimdall` from the project root\s+on a branch with \*\*no changes\*\*/,
+    );
+    expect(guide).toMatch(
+      /A \*\*RED\*\* or\s+\*\*GATE ERROR\*\* on that run means the setup is not done/,
+    );
+    expect(guide).toMatch(
+      /Do not finish until the no-change Heimdall run in Step 4 was \*\*GREEN\*\*/,
+    );
+    expect(guide).not.toMatch(/\/Users\/ken|\/Users\/\w+|Info\//);
+    const knipJson: unknown = JSON.parse(
+      fs.readFileSync(path.join(path.dirname(EXAMPLE_CONFIG_PATH), 'knip.json'), 'utf8'),
+    );
+    expect(knipJson).toEqual({
+      entry: ['src/index.ts'],
+      project: ['src/**/*.ts'],
+    });
+    expect(JSON.stringify(knipJson)).not.toMatch(PERSONAL_PATH_RE);
+  });
 });
 
 describe('heimdall.config.json', () => {
