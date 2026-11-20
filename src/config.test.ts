@@ -3,7 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { flakeLooksLikeFile, parseGateConfig } from './config.js';
-import { COMMAND_STEP_NAMES, DEFAULT_STEP_TIMEOUT_MS } from './types.js';
+import { COMMAND_STEP_NAMES, DEFAULT_STEP_TIMEOUT_MS, type GateConfig } from './types.js';
 
 describe('tsconfig.json', () => {
   it('includes test files in the default typecheck project', () => {
@@ -23,7 +23,27 @@ const EXAMPLE_CONFIG_PATH = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   '../configs/example/heimdall.config.json',
 );
+const SETUP_GUIDE_PATH = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../SETUP-WITH-AN-AGENT.md',
+);
 const OWN_CONFIG_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../heimdall.config.json');
+const PERSONAL_PATH_RE = /\/Users\/|\/home\/|~\/|[A-Za-z]:\\/;
+
+/**
+ * Load the shipped example config. Tests fail fast if it is invalid JSON or schema.
+ */
+function parsedExampleConfig(): GateConfig {
+  const parsed = parseGateConfig(
+    JSON.parse(fs.readFileSync(EXAMPLE_CONFIG_PATH, 'utf8')),
+    EXAMPLE_CONFIG_PATH,
+  );
+  expect(parsed.ok).toBe(true);
+  if (!parsed.ok) {
+    throw new Error(parsed.error);
+  }
+  return parsed.value;
+}
 
 describe('configs/example/heimdall.config.json', () => {
   it('does not default baseRef to this branch\'s own upstream', () => {
@@ -38,42 +58,60 @@ describe('configs/example/heimdall.config.json', () => {
     });
   });
 
-  it('pins tool commands to local installs with --no-install', () => {
+  it('pins repo-local tool commands with --no-install', () => {
     const raw: unknown = JSON.parse(fs.readFileSync(EXAMPLE_CONFIG_PATH, 'utf8'));
     expect(raw).toMatchObject({
       steps: {
         typecheck: { command: expect.stringContaining('npx --no-install') },
         tests: { command: expect.stringContaining('npx --no-install') },
         eslint: { command: expect.stringContaining('npx --no-install') },
-        knip: { command: expect.stringContaining('npx --no-install') },
-        jscpd: { command: expect.stringContaining('npx --no-install') },
         secrets: { command: expect.stringContaining('npx --no-install') },
         architecture: { command: expect.stringContaining('npx --no-install') },
       },
     });
   });
 
+  it('points knip and jscpd at the central config-home binaries, with no personal paths', () => {
+    const config = parsedExampleConfig();
+    const knipCommand = config.steps.knip?.command ?? '';
+    const jscpdCommand = config.steps.jscpd?.command ?? '';
+    expect(config.steps.knip?.enabled).toBe(true);
+    expect(config.steps.jscpd?.enabled).toBe(true);
+    expect(knipCommand).toContain('$HEIMDALL_HOME/node_modules/.bin/knip');
+    expect(knipCommand).toContain('$HEIMDALL_CONFIG_DIR/knip.json');
+    expect(knipCommand).toContain('--reporter json');
+    expect(knipCommand).not.toContain('npx');
+    expect(jscpdCommand).toContain('$HEIMDALL_HOME/node_modules/.bin/jscpd');
+    expect(jscpdCommand).toContain('$HEIMDALL_TMP');
+    expect(jscpdCommand).not.toContain('npx');
+    expect(knipCommand).not.toMatch(PERSONAL_PATH_RE);
+    expect(jscpdCommand).not.toMatch(PERSONAL_PATH_RE);
+    const knipJson: unknown = JSON.parse(
+      fs.readFileSync(path.join(path.dirname(EXAMPLE_CONFIG_PATH), 'knip.json'), 'utf8'),
+    );
+    expect(knipJson).toMatchObject({
+      entry: expect.any(Array),
+      project: expect.any(Array),
+    });
+  });
+
   it('shows secrets and architecture present but disabled, with pinned commands and no personal paths', () => {
     const exampleDir = path.dirname(EXAMPLE_CONFIG_PATH);
-    const parsed = parseGateConfig(JSON.parse(fs.readFileSync(EXAMPLE_CONFIG_PATH, 'utf8')), EXAMPLE_CONFIG_PATH);
-    expect(parsed.ok).toBe(true);
-    if (!parsed.ok) {
-      return;
-    }
-    const secretsCommand = parsed.value.steps.secrets?.command ?? '';
-    const architectureCommand = parsed.value.steps.architecture?.command ?? '';
-    expect(parsed.value.steps.secrets?.enabled).toBe(false);
-    expect(parsed.value.steps.architecture?.enabled).toBe(false);
+    const config = parsedExampleConfig();
+    const secretsCommand = config.steps.secrets?.command ?? '';
+    const architectureCommand = config.steps.architecture?.command ?? '';
+    expect(config.steps.secrets?.enabled).toBe(false);
+    expect(config.steps.architecture?.enabled).toBe(false);
     expect(secretsCommand).toContain('secretlint@14');
     expect(secretsCommand).toContain('--format json');
     expect(secretsCommand).toContain('$HEIMDALL_CONFIG_DIR/.secretlintrc.json');
     expect(architectureCommand).toContain('dependency-cruiser@18');
     expect(architectureCommand).toContain('--output-type json');
     expect(architectureCommand).toContain('$HEIMDALL_CONFIG_DIR/.dependency-cruiser.cjs');
-    for (const command of [secretsCommand, architectureCommand]) {
-      expect(command).toContain('npx --no-install');
-      expect(command).not.toMatch(/\/Users\/|\/home\/|~\/|[A-Za-z]:\\/);
-    }
+    expect(secretsCommand).toContain('npx --no-install');
+    expect(architectureCommand).toContain('npx --no-install');
+    expect(secretsCommand).not.toMatch(PERSONAL_PATH_RE);
+    expect(architectureCommand).not.toMatch(PERSONAL_PATH_RE);
     const secretlintrc: unknown = JSON.parse(
       fs.readFileSync(path.join(exampleDir, '.secretlintrc.json'), 'utf8'),
     );
@@ -84,21 +122,35 @@ describe('configs/example/heimdall.config.json', () => {
   });
 });
 
+describe('SETUP-WITH-AN-AGENT.md', () => {
+  it('installs pinned knip and jscpd in the config home and uses that binary when the repo has none', () => {
+    const guide = fs.readFileSync(SETUP_GUIDE_PATH, 'utf8');
+    expect(guide).toContain('CONFIG_HOME="${HEIMDALL_HOME:-$HOME/.heimdall}"');
+    expect(guide).toContain('"knip": "5.88.1"');
+    expect(guide).toContain('"jscpd": "4.3.0"');
+    expect(guide).toContain(
+      '"$HEIMDALL_HOME/node_modules/.bin/knip" --config "$HEIMDALL_CONFIG_DIR/knip.json" --reporter json --no-progress',
+    );
+    expect(guide).toContain('"$HOME/.heimdall/node_modules/.bin/knip"');
+    expect(guide).toContain('npx --no-install knip --reporter json --no-progress');
+    expect(guide).toContain('npx --no-install jscpd src --reporters json --silent --output "$HEIMDALL_TMP"');
+    expect(guide).toMatch(/A central\s+knip or jscpd install in the config home does not change the repo/);
+    expect(guide).toMatch(/Adding knip, jscpd, secretlint, or\s+dependency-cruiser to the project itself still does/);
+    expect(guide).not.toMatch(/\/Users\/ken|\/Users\/\w+|Info\//);
+  });
+});
+
 describe('heimdall.config.json', () => {
-  it('uses npx --no-install, matches the example jscpd command, and runs knip --production', () => {
+  it('uses npx --no-install for repo-local tools and runs knip --production', () => {
     const own = parseGateConfig(
       JSON.parse(fs.readFileSync(OWN_CONFIG_PATH, 'utf8')),
       'heimdall.config.json',
     );
-    const example = parseGateConfig(
-      JSON.parse(fs.readFileSync(EXAMPLE_CONFIG_PATH, 'utf8')),
-      'heimdall.config.json',
-    );
     expect(own.ok).toBe(true);
-    expect(example.ok).toBe(true);
-    if (!own.ok || !example.ok) {
+    if (!own.ok) {
       return;
     }
+    const example = parsedExampleConfig();
     for (const name of COMMAND_STEP_NAMES) {
       const command = own.value.steps[name]?.command;
       if (command === undefined) {
@@ -109,9 +161,10 @@ describe('heimdall.config.json', () => {
     }
     expect(own.value.steps.secrets).toBeUndefined();
     expect(own.value.steps.architecture).toBeUndefined();
-    expect(example.value.steps.secrets?.enabled).toBe(false);
-    expect(example.value.steps.architecture?.enabled).toBe(false);
-    expect(own.value.steps.jscpd?.command).toBe(example.value.steps.jscpd?.command);
+    expect(example.steps.secrets?.enabled).toBe(false);
+    expect(example.steps.architecture?.enabled).toBe(false);
+    expect(own.value.steps.jscpd?.command).toContain('npx --no-install jscpd');
+    expect(example.steps.jscpd?.command).toContain('$HEIMDALL_HOME/node_modules/.bin/jscpd');
     expect(own.value.steps.knip?.command).toContain('--production');
   });
 });
@@ -479,11 +532,8 @@ describe('flakeLooksLikeFile', () => {
 
 describe('bundled configs/example', () => {
   it('parses the example config and leaves requireParentBase off', () => {
-    const parsed = parseGateConfig(JSON.parse(fs.readFileSync(EXAMPLE_CONFIG_PATH, 'utf8')), EXAMPLE_CONFIG_PATH);
-    expect(parsed.ok).toBe(true);
-    if (parsed.ok) {
-      expect(parsed.value.requireParentBase).toBe(false);
-      expect(parsed.value.steps.tests?.enabled).toBe(true);
-    }
+    const config = parsedExampleConfig();
+    expect(config.requireParentBase).toBe(false);
+    expect(config.steps.tests?.enabled).toBe(true);
   });
 });

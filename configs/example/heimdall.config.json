@@ -20,12 +20,12 @@
     },
     "knip": {
       "enabled": true,
-      "command": "npx --no-install knip --reporter json --no-progress",
+      "command": "\"$HEIMDALL_HOME/node_modules/.bin/knip\" --config \"$HEIMDALL_CONFIG_DIR/knip.json\" --reporter json --no-progress",
       "timeoutMs": 300000
     },
     "jscpd": {
       "enabled": true,
-      "command": "npx --no-install jscpd src --reporters json --silent --output \"$HEIMDALL_TMP\" && cat \"$HEIMDALL_TMP/jscpd-report.json\"",
+      "command": "\"$HEIMDALL_HOME/node_modules/.bin/jscpd\" src --reporters json --silent --output \"$HEIMDALL_TMP\" && cat \"$HEIMDALL_TMP/jscpd-report.json\"",
       "timeoutMs": 300000
     },
     "secrets": {

@@ -129,9 +129,10 @@ Ask the user:
 
    ```text
    heimdall-configs/
+     package.json                # pinned knip + jscpd, once at the home root
      my-app/
        heimdall.config.json
-       knip.json                 # optional sibling, used as $HEIMDALL_CONFIG_DIR/knip.json
+       knip.json                 # sibling, used as $HEIMDALL_CONFIG_DIR/knip.json
        .secretlintrc.json        # required when steps.secrets is enabled
        .dependency-cruiser.cjs   # required when steps.architecture is enabled
      another-repo/
@@ -160,6 +161,46 @@ Ask the user:
 
 ## Step 3: Write a config for each repo
 
+**Install knip and jscpd once in the config home**, not in any project repo.
+A central copy leaves the repo's dependencies unchanged, so you do not need
+to ask before using knip or jscpd.
+
+Use `$HEIMDALL_HOME` when it is set. Otherwise use `~/.heimdall` (create it
+if needed):
+
+```bash
+CONFIG_HOME="${HEIMDALL_HOME:-$HOME/.heimdall}"
+mkdir -p "$CONFIG_HOME"
+cd "$CONFIG_HOME"
+```
+
+Write this `package.json` at that home root (exact versions; do not float to
+latest):
+
+```json
+{
+  "private": true,
+  "dependencies": {
+    "knip": "5.88.1",
+    "jscpd": "4.3.0"
+  }
+}
+```
+
+Then install:
+
+```bash
+npm install
+```
+
+If the config home is a git repo, add `node_modules/` to its `.gitignore`
+and commit `package.json` and `package-lock.json` there (with the user's
+OK). Do **not** add knip or jscpd to any project repo's `package.json`.
+
+The binaries are then `$HEIMDALL_HOME/node_modules/.bin/knip` (and `jscpd`)
+when `$HEIMDALL_HOME` is set, or `$HOME/.heimdall/node_modules/.bin/knip`
+when using `~/.heimdall`.
+
 For each repo, read (don't change) its `package.json` scripts and existing
 tool configs (`tsconfig.json`, `eslint.config.*` or `.eslintrc*`,
 `vitest.config.*`, `jest.config.*`, `knip.json`, `.jscpd.json`,
@@ -171,25 +212,28 @@ the **real** commands for each Heimdall step:
 | `typecheck` | the repo has TypeScript and a `tsconfig.json` | `npx --no-install tsc --noEmit` |
 | `tests` | the repo has Vitest or Jest | `npx --no-install vitest run --reporter=json` or `npx --no-install jest --json` |
 | `eslint` | the repo has ESLint configured | `npx --no-install eslint . -f json` |
-| `knip` | the repo has knip installed | `npx --no-install knip --reporter json --no-progress` |
-| `jscpd` | the repo has jscpd installed | `npx --no-install jscpd src --reporters json --silent --output "$HEIMDALL_TMP" && cat "$HEIMDALL_TMP/jscpd-report.json"` |
+| `knip` | JavaScript or TypeScript | no repo install: `"$HEIMDALL_HOME/node_modules/.bin/knip" --config "$HEIMDALL_CONFIG_DIR/knip.json" --reporter json --no-progress` (use `"$HOME/.heimdall/node_modules/.bin/knip"` when configs live in `~/.heimdall` without `$HEIMDALL_HOME`). Repo has knip: `npx --no-install knip --reporter json --no-progress` |
+| `jscpd` | JavaScript or TypeScript | no repo install: `"$HEIMDALL_HOME/node_modules/.bin/jscpd" src --reporters json --silent --output "$HEIMDALL_TMP" && cat "$HEIMDALL_TMP/jscpd-report.json"` (use `"$HOME/.heimdall/node_modules/.bin/jscpd"` the same way). Repo has jscpd: `npx --no-install jscpd src --reporters json --silent --output "$HEIMDALL_TMP" && cat "$HEIMDALL_TMP/jscpd-report.json"` |
 | `secrets` | the repo has secretlint 14.x | `npx --no-install -p secretlint@14 secretlint --secretlintrc "$HEIMDALL_CONFIG_DIR/.secretlintrc.json" --format json "**/*"` |
 | `architecture` | the repo has dependency-cruiser 18.x | `npx --no-install -p dependency-cruiser@18 depcruise --config "$HEIMDALL_CONFIG_DIR/.dependency-cruiser.cjs" src --output-type json` |
 | `line-checks` | always available, built in | omit it (no-silencing stays on) or set `true` for the stricter extras. When `secrets` is enabled, new `secretlint-disable` and `gitleaks:allow` comments are flagged too (the finding names the kind only, never the rest of the line). |
 
 Rules for this step:
 
-- **Only include commands that exist in the repo.** Match the repo's own
-  scripts (paths, flags, config files). Leave out steps that do not apply;
-  a missing step is off.
-- Keep `npx --no-install`, so a missing tool is a GATE ERROR instead of a
-  silent download.
+- **Only include commands the repo can run.** Match the repo's own scripts
+  (paths, flags, config files) for typecheck, tests, and eslint. knip and
+  jscpd may use the central install in the config home when the repo does
+  not have them. Leave out steps that do not apply; a missing step is off.
+- Keep `npx --no-install` for tools the repo already has, so a missing
+  binary is a GATE ERROR instead of a silent download. The central knip and
+  jscpd commands call the config-home binaries directly (no `npx`).
 - Use the JSON reporters shown above. Heimdall parses tool output, and
   unparseable output from a failing command is a GATE ERROR.
-- **Ask before adding a tool the repo does not have** (for example knip,
-  jscpd, secretlint, or dependency-cruiser). Adding one changes the project's
-  dependencies, so it needs the user's OK under the hard rules. Pin secretlint
-  14.x (with `@secretlint/secretlint-rule-preset-recommend` in
+- **Ask before adding a tool to the repo's own dependencies.** A central
+  knip or jscpd install in the config home does not change the repo, so it
+  does not need asking. Adding knip, jscpd, secretlint, or
+  dependency-cruiser to the project itself still does. Pin secretlint 14.x
+  (with `@secretlint/secretlint-rule-preset-recommend` in
   `.secretlintrc.json`) and dependency-cruiser 18.x in the command; do not
   leave `npx` unpinned.
 - **Ask which folders to protect.** Anything listed in `protectedPaths`
@@ -209,11 +253,14 @@ Rules for this step:
 - Leave `maxChangedFiles` at its default (`100`) unless the user asks.
 - Leave `flakes` empty. Only add an entry with the user's explicit OK, as
   `"file > full test title"`.
-- If the repo already has its own knip or jscpd config you want Heimdall to
-  use, you can keep a copy next to the Heimdall config and reference it as
-  `"$HEIMDALL_CONFIG_DIR/knip.json"`. For `secrets` and `architecture`, keep
-  `.secretlintrc.json` and `.dependency-cruiser.cjs` next to the Heimdall
-  config the same way. A missing or empty rules file is a GATE ERROR.
+- When using the central knip binary, always pass
+  `--config "$HEIMDALL_CONFIG_DIR/knip.json"` so the merge-base run loads the
+  same file. If the repo already has a knip or jscpd config, keep a copy
+  next to the Heimdall config. If it has none, write a sibling
+  [`knip.json`](./configs/example/knip.json). For `secrets` and
+  `architecture`, keep `.secretlintrc.json` and `.dependency-cruiser.cjs`
+  next to the Heimdall config the same way. A missing or empty rules file
+  is a GATE ERROR.
 
 A minimal config for a TypeScript + Vitest + ESLint repo:
 
@@ -363,7 +410,7 @@ user to decide:
 ```text
 Repo:        /path/to/my-app
 Config:      $HEIMDALL_HOME/my-app/heimdall.config.json (committed: yes/no)
-Steps:       typecheck, tests, eslint, line-checks (knip, jscpd not used: not installed)
+Steps:       typecheck, tests, eslint, knip, jscpd, line-checks (knip, jscpd: $HEIMDALL_HOME/node_modules/.bin)
 Protected:   src/generated/** (or: none)
 Setup:       none (or: the setup/teardown commands)
 Result:      GREEN / RED / GATE ERROR
