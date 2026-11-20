@@ -288,10 +288,14 @@ new if the merge-base only has one. A git rename (`diff -M`) matches the
 finding in the new path against the merge-base under the old path. Architecture
 messages map each ` -> ` path segment exactly onto the old path. ESLint messages
 drop standalone digit runs so `no-shadow` line/column text still matches after
-line drift; identifier names such as `foo2` stay distinct. For `complexity` and
-`max-*` metric rules the first number is the measured value. Same-key leftovers
-pair against remaining merge-base values (highest first): a leftover is new
-when it has no distinct base finding whose value is at least as high. Tests and
+line drift; identifier names such as `foo2` stay distinct. For `complexity`,
+`max-depth`, `max-lines`, `max-lines-per-function`, `max-nested-callbacks`,
+`max-params`, and `max-statements` the first number is the measured value.
+Same-key leftovers pair against remaining merge-base values (highest first):
+a leftover is new when it has no distinct base finding whose value is at
+least as high. Other rules, including remaining core `max-*` rules and plugin
+rules such as `@typescript-eslint/max-params`, match by digit-stripped message
+only, so a worse value there is not caught. Tests and
 typecheck run in full. `line-checks` only looks at added lines. An empty
 diff against the resolved base prints a **WARNING** in the summary naming
 that base.
