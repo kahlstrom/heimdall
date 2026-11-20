@@ -238,8 +238,8 @@ its index.
 | `tests` | Always runs in full. Prefer a JSON reporter (`vitest --reporter=json`, `jest --json`) so failures are not scraped from text. |
 | `typecheck` | Full typecheck (`tsc --noEmit` or equivalent). |
 | `eslint` | Prefer `-f json` so findings can be scoped. Extra key: `maxWarnings`. A finding counts if it is on an added line, or if it is new versus the merge-base anywhere. Matching uses rule, optional `messageId`, and the message with digit runs normalized (identifier names stay distinct). A renamed file matches the merge-base under the old path. The baseline run happens only when the branch has findings off added lines; a baseline failure is a GATE ERROR. |
-| `knip` | Prefer `--reporter json`. When the repo has no knip, use the central command in [`configs/example/heimdall.config.json`](./configs/example/heimdall.config.json). |
-| `jscpd` | Must print JSON on stdout. `$HEIMDALL_TMP` is a per-run temp dir. When the repo has no jscpd, use the central command in that same example. |
+| `knip` | Prefer `--reporter json`. For a home config with no knip, use the central command in [`configs/example/heimdall.config.json`](./configs/example/heimdall.config.json). For an in-repo config, see [SETUP-WITH-AN-AGENT.md](./SETUP-WITH-AN-AGENT.md#step-3-write-a-config-for-each-repo) Step 3. |
+| `jscpd` | Must print JSON on stdout. `$HEIMDALL_TMP` is a per-run temp dir. For a home config with no jscpd, use the central command in that same example. For an in-repo config, see that same SETUP Step 3. |
 | `secrets` | Prefer secretlint 14.x `--format json`. No default command. Findings are scoped to added lines; the report prints rule id and `file:line` only, never the matched secret. |
 | `architecture` | Prefer dependency-cruiser 18.x `--output-type json`. No default command, rules file, or tool path. Fails only on new error-severity violations versus the merge-base; warnings are ignored. |
 
