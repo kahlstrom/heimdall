@@ -62,7 +62,7 @@ function parsedExampleConfig(): GateConfig {
 /**
  * Load the shipped example knip.json. Tests fail fast if it is personal or extra.
  */
-function exampleKnipJson(): unknown {
+function exampleKnipJson(): void {
   const knipJson: unknown = JSON.parse(
     fs.readFileSync(path.join(path.dirname(EXAMPLE_CONFIG_PATH), 'knip.json'), 'utf8'),
   );
@@ -71,7 +71,6 @@ function exampleKnipJson(): unknown {
     project: ['src/**/*.ts'],
   });
   expect(JSON.stringify(knipJson)).not.toMatch(PERSONAL_PATH_RE);
-  return knipJson;
 }
 
 describe('configs/example/heimdall.config.json', () => {
@@ -146,19 +145,39 @@ describe('configs/example/heimdall.config.json', () => {
 describe('SETUP-WITH-AN-AGENT.md', () => {
   it('installs pinned knip and jscpd in the config home and uses that binary when the repo has none', () => {
     const guide = fs.readFileSync(SETUP_GUIDE_PATH, 'utf8');
-    expect(guide).toContain('CONFIG_HOME="${HEIMDALL_HOME:-$HOME/.heimdall}"');
+    expect(guide).toContain('CONFIG_HOME="<folder holding heimdall.config.json>/.."');
+    expect(guide).not.toContain('CONFIG_HOME="${HEIMDALL_HOME:-$HOME/.heimdall}"');
     expect(guide).toContain('"knip": "5.88.1"');
     expect(guide).toContain('"jscpd": "4.3.0"');
     expect(guide).toContain(CENTRAL_KNIP_COMMAND);
+    expect(guide.split(CENTRAL_KNIP_COMMAND).length - 1).toBe(1);
     expect(guide).toContain(`"${CENTRAL_JSCPD_BIN}"`);
-    expect(guide).toContain('npx --no-install knip --reporter json --no-progress');
+    expect(guide).toContain(
+      'npx --no-install knip --config "$HEIMDALL_CONFIG_DIR/knip.json" --reporter json --no-progress',
+    );
+    expect(guide).not.toContain('npx --no-install knip --reporter json --no-progress');
     expect(guide).toContain('npx --no-install jscpd src --reporters json --silent --output "$HEIMDALL_TMP"');
+    expect(guide).toMatch(/Always pass `--config "\$HEIMDALL_CONFIG_DIR\/knip\.json"` on every knip/);
     expect(guide).toMatch(/A central\s+knip or jscpd install in the config home does not change the repo/);
     expect(guide).toMatch(/Adding knip, jscpd, secretlint, or\s+dependency-cruiser to the project itself still does/);
     expect(guide).toMatch(/When the Heimdall config is in the project repo/);
+    expect(guide).toMatch(
+      /ask the\s+user once to add the same pinned versions to the repo's `devDependencies`/,
+    );
+    expect(guide).toMatch(/If they decline, leave that step out, say so in the Step 6 report/);
+    expect(guide).toMatch(/the only exception to "Never disable knip"/);
     expect(guide).not.toMatch(GUIDE_PERSONAL_PATH_RE);
     for (const bin of DUAL_LAYOUT_KNIP_BINS) {
       expect(guide).not.toContain(bin);
+    }
+    expect(guide).not.toContain('$HOME/.heimdall/node_modules/.bin/jscpd');
+    expect(guide).not.toContain('$HEIMDALL_HOME/node_modules/.bin/jscpd');
+    const npxKnipCommands = [...guide.matchAll(/npx --no-install knip\b[^`\n]*/g)].map(
+      (match) => match[0],
+    );
+    expect(npxKnipCommands.length).toBeGreaterThan(0);
+    for (const command of npxKnipCommands) {
+      expect(command).toContain('--config');
     }
   });
 
@@ -183,6 +202,7 @@ describe('SETUP-WITH-AN-AGENT.md', () => {
     expect(guide).toMatch(/Never ignore real source folders/);
     expect(guide).toMatch(/Never use a blanket ignore/);
     expect(guide).toMatch(/Ask the user only about findings you cannot classify/);
+    expect(guide).toMatch(/Skip this loop if knip was left out because the user/);
     expect(guide).not.toMatch(GUIDE_PERSONAL_PATH_RE);
   });
 
@@ -208,17 +228,11 @@ describe('SETUP-WITH-AN-AGENT.md', () => {
       /Do not finish until the no-change Heimdall run in Step 4 was \*\*GREEN\*\*/,
     );
     expect(guide).not.toMatch(GUIDE_PERSONAL_PATH_RE);
-    exampleKnipJson();
   });
 
-  it('states the central knip and jscpd command once; other docs link to it', () => {
-    const guide = fs.readFileSync(SETUP_GUIDE_PATH, 'utf8');
+  it('other docs link to the setup guide for the central knip and jscpd command', () => {
     const readme = fs.readFileSync(README_PATH, 'utf8');
     const configsReadme = fs.readFileSync(CONFIGS_README_PATH, 'utf8');
-    expect(guide).toContain(CENTRAL_KNIP_COMMAND);
-    expect(guide).toContain(`"${CENTRAL_JSCPD_BIN}"`);
-    expect(guide).toContain('"knip": "5.88.1"');
-    expect(guide).toContain('"jscpd": "4.3.0"');
     expect(readme).toContain('SETUP-WITH-AN-AGENT.md#step-3-write-a-config-for-each-repo');
     expect(readme).toContain('configs/example/heimdall.config.json');
     expect(configsReadme).toContain('SETUP-WITH-AN-AGENT.md#step-3-write-a-config-for-each-repo');
@@ -227,7 +241,7 @@ describe('SETUP-WITH-AN-AGENT.md', () => {
     expect(readme).not.toContain('4.3.0');
     expect(configsReadme).not.toContain('5.88.1');
     expect(configsReadme).not.toContain('4.3.0');
-    for (const doc of [guide, readme, configsReadme]) {
+    for (const doc of [readme, configsReadme]) {
       for (const bin of DUAL_LAYOUT_KNIP_BINS) {
         expect(doc).not.toContain(bin);
       }

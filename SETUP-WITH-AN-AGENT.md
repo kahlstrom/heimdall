@@ -161,15 +161,18 @@ Ask the user:
 
 ## Step 3: Write a config for each repo
 
-**Install knip and jscpd once in the config home**, not in any project repo.
-A central copy leaves the repo's dependencies unchanged, so you do not need
-to ask before using knip or jscpd.
-
-Use `$HEIMDALL_HOME` when it is set. Otherwise use `~/.heimdall` (create it
-if needed):
+**Install knip and jscpd once in the parent of the folder holding this
+repo's `heimdall.config.json`**, when that config lives in the config
+home (not in the project repo). A central copy leaves the repo's
+dependencies unchanged, so you do not need to ask before using knip or
+jscpd. Heimdall is not running here, so `$HEIMDALL_CONFIG_DIR` is unset;
+use the folder that holds this repo's `heimdall.config.json`. Do not
+install from `$HEIMDALL_HOME` in the agent's shell: an IDE may still
+resolve configs from `~/.heimdall` (Step 2). If the Heimdall config is
+in the project repo, skip this install and use the in-repo path below.
 
 ```bash
-CONFIG_HOME="${HEIMDALL_HOME:-$HOME/.heimdall}"
+CONFIG_HOME="<folder holding heimdall.config.json>/.."
 mkdir -p "$CONFIG_HOME"
 cd "$CONFIG_HOME"
 ```
@@ -195,7 +198,8 @@ npm install
 
 If the config home is a git repo, add `node_modules/` to its `.gitignore`
 and commit `package.json` and `package-lock.json` there (with the user's
-OK). Do **not** add knip or jscpd to any project repo's `package.json`.
+OK). Do **not** add knip or jscpd to any project repo's `package.json`
+except the in-repo-config case below.
 
 Heimdall does not set `$HEIMDALL_HOME` for step commands. A home config
 always sits at `<home>/<repo-folder>/`, so both `$HEIMDALL_HOME` and
@@ -214,7 +218,11 @@ link here and to
 
 When the Heimdall config is in the project repo (only with the user's OK),
 `$HEIMDALL_CONFIG_DIR/../node_modules/.bin` is not the config home. Use the
-repo's own install: `npx --no-install knip` and `npx --no-install jscpd`.
+repo's own install: `npx --no-install knip --config "$HEIMDALL_CONFIG_DIR/knip.json"`
+and `npx --no-install jscpd`. If the repo has no knip or jscpd, ask the
+user once to add the same pinned versions to the repo's `devDependencies`.
+If they decline, leave that step out, say so in the Step 6 report, and
+treat this as the only exception to "Never disable knip" below.
 
 For each repo, read (don't change) its `package.json` scripts and existing
 tool configs (`tsconfig.json`, `eslint.config.*` or `.eslintrc*`,
@@ -227,7 +235,7 @@ the **real** commands for each Heimdall step:
 | `typecheck` | the repo has TypeScript and a `tsconfig.json` | `npx --no-install tsc --noEmit` |
 | `tests` | the repo has Vitest or Jest | `npx --no-install vitest run --reporter=json` or `npx --no-install jest --json` |
 | `eslint` | the repo has ESLint configured | `npx --no-install eslint . -f json` |
-| `knip` | JavaScript or TypeScript | config-home, no repo install: the central command above. In-repo config or repo has knip: `npx --no-install knip --reporter json --no-progress`. Generate the sibling `knip.json` with the loop below. |
+| `knip` | JavaScript or TypeScript | config-home, no repo install: the central command above. In-repo config or repo has knip: `npx --no-install knip --config "$HEIMDALL_CONFIG_DIR/knip.json" --reporter json --no-progress`. Generate the sibling `knip.json` with the loop below. |
 | `jscpd` | JavaScript or TypeScript | config-home, no repo install: the central command above. In-repo config or repo has jscpd: `npx --no-install jscpd src --reporters json --silent --output "$HEIMDALL_TMP" && cat "$HEIMDALL_TMP/jscpd-report.json"` |
 | `secrets` | the repo has secretlint 14.x | `npx --no-install -p secretlint@14 secretlint --secretlintrc "$HEIMDALL_CONFIG_DIR/.secretlintrc.json" --format json "**/*"` |
 | `architecture` | the repo has dependency-cruiser 18.x | `npx --no-install -p dependency-cruiser@18 depcruise --config "$HEIMDALL_CONFIG_DIR/.dependency-cruiser.cjs" src --output-type json` |
@@ -268,9 +276,10 @@ Rules for this step:
 - Leave `maxChangedFiles` at its default (`100`) unless the user asks.
 - Leave `flakes` empty. Only add an entry with the user's explicit OK, as
   `"file > full test title"`.
-- When using the central knip binary, always pass
-  `--config "$HEIMDALL_CONFIG_DIR/knip.json"` so the merge-base run loads the
-  same file. Generate that sibling with the loop below: write `knip.json`
+- Always pass `--config "$HEIMDALL_CONFIG_DIR/knip.json"` on every knip
+  command, including the central binary and `npx --no-install`, so the
+  merge-base run loads the same sibling file. Generate that sibling with
+  the loop below: write `knip.json`
   next to whichever `heimdall.config.json` will be used (in the project repo
   only with the user's OK, per hard rule 1). If the repo already has a knip
   or jscpd config, copy it next to the Heimdall config; still run the knip
@@ -282,7 +291,8 @@ Rules for this step:
 
 Write a working sibling `knip.json` so knip matches how this repo actually
 boots. Do it with as little user involvement as you can: classify each
-finding yourself.
+finding yourself. Skip this loop if knip was left out because the user
+declined adding it to an in-repo config.
 
 **Loop** (stop when what is left is real dead code, for at most about 5
 rounds):
@@ -331,7 +341,9 @@ rounds):
 **Hard rules for this loop:**
 
 - **Never disable knip.** Do not set `steps.knip.enabled` to `false`, drop
-  the step, or skip the command to get a clean run.
+  the step, or skip the command to get a clean run. The only exception is
+  an in-repo Heimdall config whose repo has no knip and whose user declined
+  adding it: leave the step out and say so in the Step 6 report.
 - **Never ignore real source folders** (for example `"src/**"` or
   `"packages/**"`). `ignore` is only for generated or vendored trees.
 - **Never use a blanket ignore** (`"**"`, `"**/*"`, or any `ignore` that
@@ -499,7 +511,9 @@ memory, wherever it keeps rules that apply to every coding task.
 ## Step 6: Report back
 
 Finish with one block per repo, then a short list of anything left for the
-user to decide. If the no-change Heimdall run in Step 4 was **GREEN**,
+user to decide. If knip or jscpd was omitted because the user declined
+adding the pinned tools to an in-repo config, include that here. If the
+no-change Heimdall run in Step 4 was **GREEN**,
 Result is `GREEN`. If it was **RED** or **GATE ERROR**, follow that
 step's handling (report and ask; do not work around a GATE ERROR) and
 finish with `setup not proven: <reason>` — for example a base-branch
