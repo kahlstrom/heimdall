@@ -93,6 +93,12 @@ describe('configs/example/heimdall.config.json', () => {
       entry: expect.any(Array),
       project: expect.any(Array),
     });
+    expect(JSON.stringify(knipJson)).not.toMatch(PERSONAL_PATH_RE);
+    if (typeof knipJson === 'object' && knipJson !== null && 'ignore' in knipJson) {
+      const ignore = knipJson.ignore;
+      expect(Array.isArray(ignore)).toBe(true);
+      expect(ignore).not.toEqual(expect.arrayContaining(['**', '**/*', 'src/**', 'packages/**']));
+    }
   });
 
   it('shows secrets and architecture present but disabled, with pinned commands and no personal paths', () => {
@@ -136,6 +142,29 @@ describe('SETUP-WITH-AN-AGENT.md', () => {
     expect(guide).toContain('npx --no-install jscpd src --reporters json --silent --output "$HEIMDALL_TMP"');
     expect(guide).toMatch(/A central\s+knip or jscpd install in the config home does not change the repo/);
     expect(guide).toMatch(/Adding knip, jscpd, secretlint, or\s+dependency-cruiser to the project itself still does/);
+    expect(guide).not.toMatch(/\/Users\/ken|\/Users\/\w+|Info\//);
+  });
+
+  it('gives a knip.json loop that triages findings without hiding real dead code', () => {
+    const guide = fs.readFileSync(SETUP_GUIDE_PATH, 'utf8');
+    expect(guide).toMatch(/Infer it from the repo's `package\.json`/);
+    expect(guide).toMatch(/the framework, entry points, and workspaces/);
+    expect(guide).toContain(
+      '"$HEIMDALL_HOME/node_modules/.bin/knip" --config "$HEIMDALL_HOME/<repo-folder>/knip.json"',
+    );
+    expect(guide).toMatch(
+      /config files, scripts, server or worker entries, framework routes/,
+    );
+    expect(guide).toMatch(/Add it to `entry`, or to that package's `entry` under `workspaces`/);
+    expect(guide).toMatch(/generated or vendored folder/);
+    expect(guide).toMatch(/Add it to `ignore`/);
+    expect(guide).toContain('"<plugin>": false');
+    expect(guide).toMatch(/Leave it reported\. List it for the user\. Never hide it/);
+    expect(guide).toMatch(/at most about 5 rounds/);
+    expect(guide).toMatch(/Never disable knip/);
+    expect(guide).toMatch(/Never ignore real source folders/);
+    expect(guide).toMatch(/Never use a blanket ignore/);
+    expect(guide).toMatch(/Ask the user only about findings you cannot classify/);
     expect(guide).not.toMatch(/\/Users\/ken|\/Users\/\w+|Info\//);
   });
 });

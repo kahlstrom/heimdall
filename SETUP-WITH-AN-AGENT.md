@@ -212,7 +212,7 @@ the **real** commands for each Heimdall step:
 | `typecheck` | the repo has TypeScript and a `tsconfig.json` | `npx --no-install tsc --noEmit` |
 | `tests` | the repo has Vitest or Jest | `npx --no-install vitest run --reporter=json` or `npx --no-install jest --json` |
 | `eslint` | the repo has ESLint configured | `npx --no-install eslint . -f json` |
-| `knip` | JavaScript or TypeScript | no repo install: `"$HEIMDALL_HOME/node_modules/.bin/knip" --config "$HEIMDALL_CONFIG_DIR/knip.json" --reporter json --no-progress` (use `"$HOME/.heimdall/node_modules/.bin/knip"` when configs live in `~/.heimdall` without `$HEIMDALL_HOME`). Repo has knip: `npx --no-install knip --reporter json --no-progress` |
+| `knip` | JavaScript or TypeScript | no repo install: `"$HEIMDALL_HOME/node_modules/.bin/knip" --config "$HEIMDALL_CONFIG_DIR/knip.json" --reporter json --no-progress` (use `"$HOME/.heimdall/node_modules/.bin/knip"` when configs live in `~/.heimdall` without `$HEIMDALL_HOME`). Repo has knip: `npx --no-install knip --reporter json --no-progress`. Generate the sibling `knip.json` with the loop below. |
 | `jscpd` | JavaScript or TypeScript | no repo install: `"$HEIMDALL_HOME/node_modules/.bin/jscpd" src --reporters json --silent --output "$HEIMDALL_TMP" && cat "$HEIMDALL_TMP/jscpd-report.json"` (use `"$HOME/.heimdall/node_modules/.bin/jscpd"` the same way). Repo has jscpd: `npx --no-install jscpd src --reporters json --silent --output "$HEIMDALL_TMP" && cat "$HEIMDALL_TMP/jscpd-report.json"` |
 | `secrets` | the repo has secretlint 14.x | `npx --no-install -p secretlint@14 secretlint --secretlintrc "$HEIMDALL_CONFIG_DIR/.secretlintrc.json" --format json "**/*"` |
 | `architecture` | the repo has dependency-cruiser 18.x | `npx --no-install -p dependency-cruiser@18 depcruise --config "$HEIMDALL_CONFIG_DIR/.dependency-cruiser.cjs" src --output-type json` |
@@ -255,12 +255,70 @@ Rules for this step:
   `"file > full test title"`.
 - When using the central knip binary, always pass
   `--config "$HEIMDALL_CONFIG_DIR/knip.json"` so the merge-base run loads the
-  same file. If the repo already has a knip or jscpd config, keep a copy
-  next to the Heimdall config. If it has none, write a sibling
-  [`knip.json`](./configs/example/knip.json). For `secrets` and
-  `architecture`, keep `.secretlintrc.json` and `.dependency-cruiser.cjs`
-  next to the Heimdall config the same way. A missing or empty rules file
-  is a GATE ERROR.
+  same file. Generate that sibling with the loop below (write it in the
+  config folder, not in the project repo). If the repo already has a knip
+  or jscpd config, copy it next to the Heimdall config; still run the knip
+  loop on that copy. For `secrets` and `architecture`, keep
+  `.secretlintrc.json` and `.dependency-cruiser.cjs` next to the Heimdall
+  config the same way. A missing or empty rules file is a GATE ERROR.
+
+### Generate `$HEIMDALL_CONFIG_DIR/knip.json`
+
+Write a working sibling `knip.json` so knip matches how this repo actually
+boots. Do it with as little user involvement as you can: classify each
+finding yourself.
+
+**Loop** (stop when what is left is real dead code, for at most about 5
+rounds):
+
+1. **Write a starter `knip.json`** next to this repo's
+   `heimdall.config.json`. Infer it from the repo's `package.json` (`bin`,
+   `main`, `exports`, `scripts`, `workspaces`), any `pnpm-workspace.yaml`,
+   the framework, entry points, and workspaces. A typical single-package
+   TypeScript starter is
+   [`configs/example/knip.json`](./configs/example/knip.json).
+
+   For a monorepo, put per-package `entry` and `project` under
+   `workspaces` (the root workspace is `"."`). Knip ignores root-level
+   `entry` / `project` when `workspaces` is set.
+
+2. **Run the central knip** from the project repo root with `--config`
+   pointing at that sibling file:
+
+   ```bash
+   "$HEIMDALL_HOME/node_modules/.bin/knip" --config "$HEIMDALL_HOME/<repo-folder>/knip.json"
+   ```
+
+   When configs live in `~/.heimdall` without `$HEIMDALL_HOME`, use
+   `"$HOME/.heimdall/node_modules/.bin/knip"` and
+   `"$HOME/.heimdall/<repo-folder>/knip.json"`.
+
+3. **Triage each flagged item.** Do not hide anything you have not
+   classified.
+
+   | Finding | Action |
+   | --- | --- |
+   | A real file reported unused that the repo actually uses (config files, scripts, server or worker entries, framework routes) | Add it to `entry`, or to that package's `entry` under `workspaces` |
+   | A generated or vendored folder | Add it to `ignore` |
+   | A plugin that is misfiring | Disable it with `"<plugin>": false` |
+   | Real dead code (unused files, exports, or dependencies that nothing loads) | Leave it reported. List it for the user. Never hide it with `ignore` or extra `entry` rows |
+
+4. **Repeat** from step 2 until the leftover findings are real dead
+   code, for at most about 5 rounds. Then stop, keep the sibling
+   `knip.json`, and report what is still flagged (the real dead code, plus
+   anything you could not classify).
+
+**Hard rules for this loop:**
+
+- **Never disable knip.** Do not set `steps.knip.enabled` to `false`, drop
+  the step, or skip the command to get a clean run.
+- **Never ignore real source folders** (for example `"src/**"` or
+  `"packages/**"`). `ignore` is only for generated or vendored trees.
+- **Never use a blanket ignore** (`"**"`, `"**/*"`, or any `ignore` that
+  swallows the project) to get a clean run.
+- **Ask the user only about findings you cannot classify.** If you can
+  tell it is an entry, generated or vendored, a bad plugin, or dead code,
+  act on it without asking.
 
 A minimal config for a TypeScript + Vitest + ESLint repo:
 
@@ -416,6 +474,7 @@ Setup:       none (or: the setup/teardown commands)
 Result:      GREEN / RED / GATE ERROR
 Rule:        Cursor global rule (or: CLAUDE.md in repo, not committed; none)
 Changes in this repo: none (or: exactly what was changed, with the user's OK)
+knip leftover: none (or: the real dead code still reported, listed; never hidden)
 
 <HEIMDALL SUMMARY block pasted exactly>
 ```
