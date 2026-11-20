@@ -238,8 +238,8 @@ its index.
 | `tests` | Always runs in full. Prefer a JSON reporter (`vitest --reporter=json`, `jest --json`) so failures are not scraped from text. |
 | `typecheck` | Full typecheck (`tsc --noEmit` or equivalent). |
 | `eslint` | Prefer `-f json` so findings can be scoped. Extra key: `maxWarnings`. A finding counts if it is on an added line, or if it is new versus the merge-base anywhere. Matching uses rule, optional `messageId`, and the message with digit runs normalized (identifier names stay distinct). A renamed file matches the merge-base under the old path. The baseline run happens only when the branch has findings off added lines; a baseline failure is a GATE ERROR. |
-| `knip` | Prefer `--reporter json`. When the repo has no knip, call `"$HEIMDALL_HOME/node_modules/.bin/knip"` (or `"$HOME/.heimdall/node_modules/.bin/knip"`) with `--config "$HEIMDALL_CONFIG_DIR/knip.json"`. |
-| `jscpd` | Must print JSON on stdout. `$HEIMDALL_TMP` is a per-run temp dir. When the repo has no jscpd, call the same central `jscpd` binary. |
+| `knip` | Prefer `--reporter json`. When the repo has no knip, use the central command in [`configs/example/heimdall.config.json`](./configs/example/heimdall.config.json). |
+| `jscpd` | Must print JSON on stdout. `$HEIMDALL_TMP` is a per-run temp dir. When the repo has no jscpd, use the central command in that same example. |
 | `secrets` | Prefer secretlint 14.x `--format json`. No default command. Findings are scoped to added lines; the report prints rule id and `file:line` only, never the matched secret. |
 | `architecture` | Prefer dependency-cruiser 18.x `--output-type json`. No default command, rules file, or tool path. Fails only on new error-severity violations versus the merge-base; warnings are ignored. |
 
@@ -412,27 +412,14 @@ deprecation warning. Using `gate.config.json` instead of
 
 `$HEIMDALL_CONFIG_DIR` is the folder that holds the config file that was used
 (in-repo or under `$HEIMDALL_HOME`), including on knip's merge-base run, so a
-command can load a sibling file. When the repo has no knip, call the central
-binary in the config home:
-
-```text
-"$HEIMDALL_HOME/node_modules/.bin/knip" --config "$HEIMDALL_CONFIG_DIR/knip.json" --reporter json --no-progress
-```
-
-When configs live in `~/.heimdall` without `$HEIMDALL_HOME`, use
-`"$HOME/.heimdall/node_modules/.bin/knip"` instead. When the repo already
-has knip:
+command can load a sibling file. When the repo has no knip or jscpd, the
+central-binary command and pinned versions are in
+[SETUP-WITH-AN-AGENT.md](./SETUP-WITH-AN-AGENT.md#step-3-write-a-config-for-each-repo)
+and [`configs/example/heimdall.config.json`](./configs/example/heimdall.config.json).
+When the repo already has knip:
 
 ```text
 npx --no-install knip --config "$HEIMDALL_CONFIG_DIR/knip.json" --reporter json --no-progress
-```
-
-Example jscpd command when the repo has no jscpd (use
-`"$HOME/.heimdall/node_modules/.bin/jscpd"` the same way when configs live
-in `~/.heimdall`):
-
-```text
-"$HEIMDALL_HOME/node_modules/.bin/jscpd" src --reporters json --silent --output "$HEIMDALL_TMP" && cat "$HEIMDALL_TMP/jscpd-report.json"
 ```
 
 When the repo already has jscpd:

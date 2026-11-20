@@ -197,9 +197,24 @@ If the config home is a git repo, add `node_modules/` to its `.gitignore`
 and commit `package.json` and `package-lock.json` there (with the user's
 OK). Do **not** add knip or jscpd to any project repo's `package.json`.
 
-The binaries are then `$HEIMDALL_HOME/node_modules/.bin/knip` (and `jscpd`)
-when `$HEIMDALL_HOME` is set, or `$HOME/.heimdall/node_modules/.bin/knip`
-when using `~/.heimdall`.
+Heimdall does not set `$HEIMDALL_HOME` for step commands. A home config
+always sits at `<home>/<repo-folder>/`, so both `$HEIMDALL_HOME` and
+`~/.heimdall` use one central-binary form. That command, and the pinned
+versions in the `package.json` above, are stated here once; other docs
+link here and to
+[`configs/example/heimdall.config.json`](./configs/example/heimdall.config.json):
+
+```text
+"$HEIMDALL_CONFIG_DIR/../node_modules/.bin/knip" --config "$HEIMDALL_CONFIG_DIR/knip.json" --reporter json --no-progress
+```
+
+```text
+"$HEIMDALL_CONFIG_DIR/../node_modules/.bin/jscpd" src --reporters json --silent --output "$HEIMDALL_TMP" && cat "$HEIMDALL_TMP/jscpd-report.json"
+```
+
+When the Heimdall config is in the project repo (only with the user's OK),
+`$HEIMDALL_CONFIG_DIR/../node_modules/.bin` is not the config home. Use the
+repo's own install: `npx --no-install knip` and `npx --no-install jscpd`.
 
 For each repo, read (don't change) its `package.json` scripts and existing
 tool configs (`tsconfig.json`, `eslint.config.*` or `.eslintrc*`,
@@ -212,8 +227,8 @@ the **real** commands for each Heimdall step:
 | `typecheck` | the repo has TypeScript and a `tsconfig.json` | `npx --no-install tsc --noEmit` |
 | `tests` | the repo has Vitest or Jest | `npx --no-install vitest run --reporter=json` or `npx --no-install jest --json` |
 | `eslint` | the repo has ESLint configured | `npx --no-install eslint . -f json` |
-| `knip` | JavaScript or TypeScript | no repo install: `"$HEIMDALL_HOME/node_modules/.bin/knip" --config "$HEIMDALL_CONFIG_DIR/knip.json" --reporter json --no-progress` (use `"$HOME/.heimdall/node_modules/.bin/knip"` when configs live in `~/.heimdall` without `$HEIMDALL_HOME`). Repo has knip: `npx --no-install knip --reporter json --no-progress`. Generate the sibling `knip.json` with the loop below. |
-| `jscpd` | JavaScript or TypeScript | no repo install: `"$HEIMDALL_HOME/node_modules/.bin/jscpd" src --reporters json --silent --output "$HEIMDALL_TMP" && cat "$HEIMDALL_TMP/jscpd-report.json"` (use `"$HOME/.heimdall/node_modules/.bin/jscpd"` the same way). Repo has jscpd: `npx --no-install jscpd src --reporters json --silent --output "$HEIMDALL_TMP" && cat "$HEIMDALL_TMP/jscpd-report.json"` |
+| `knip` | JavaScript or TypeScript | config-home, no repo install: the central command above. In-repo config or repo has knip: `npx --no-install knip --reporter json --no-progress`. Generate the sibling `knip.json` with the loop below. |
+| `jscpd` | JavaScript or TypeScript | config-home, no repo install: the central command above. In-repo config or repo has jscpd: `npx --no-install jscpd src --reporters json --silent --output "$HEIMDALL_TMP" && cat "$HEIMDALL_TMP/jscpd-report.json"` |
 | `secrets` | the repo has secretlint 14.x | `npx --no-install -p secretlint@14 secretlint --secretlintrc "$HEIMDALL_CONFIG_DIR/.secretlintrc.json" --format json "**/*"` |
 | `architecture` | the repo has dependency-cruiser 18.x | `npx --no-install -p dependency-cruiser@18 depcruise --config "$HEIMDALL_CONFIG_DIR/.dependency-cruiser.cjs" src --output-type json` |
 | `line-checks` | always available, built in | omit it (no-silencing stays on) or set `true` for the stricter extras. When `secrets` is enabled, new `secretlint-disable` and `gitleaks:allow` comments are flagged too (the finding names the kind only, never the rest of the line). |
@@ -255,8 +270,9 @@ Rules for this step:
   `"file > full test title"`.
 - When using the central knip binary, always pass
   `--config "$HEIMDALL_CONFIG_DIR/knip.json"` so the merge-base run loads the
-  same file. Generate that sibling with the loop below (write it in the
-  config folder, not in the project repo). If the repo already has a knip
+  same file. Generate that sibling with the loop below: write `knip.json`
+  next to whichever `heimdall.config.json` will be used (in the project repo
+  only with the user's OK, per hard rule 1). If the repo already has a knip
   or jscpd config, copy it next to the Heimdall config; still run the knip
   loop on that copy. For `secrets` and `architecture`, keep
   `.secretlintrc.json` and `.dependency-cruiser.cjs` next to the Heimdall
@@ -283,15 +299,16 @@ rounds):
    `entry` / `project` when `workspaces` is set.
 
 2. **Run the central knip** from the project repo root with `--config`
-   pointing at that sibling file:
+   pointing at that sibling file. Heimdall is not running here, so
+   `$HEIMDALL_CONFIG_DIR` is unset; use the folder that holds this repo's
+   `heimdall.config.json`:
 
    ```bash
-   "$HEIMDALL_HOME/node_modules/.bin/knip" --config "$HEIMDALL_HOME/<repo-folder>/knip.json"
+   "<folder holding heimdall.config.json>/../node_modules/.bin/knip" --config "<folder holding heimdall.config.json>/knip.json"
    ```
 
-   When configs live in `~/.heimdall` without `$HEIMDALL_HOME`, use
-   `"$HOME/.heimdall/node_modules/.bin/knip"` and
-   `"$HOME/.heimdall/<repo-folder>/knip.json"`.
+   When the Heimdall config is in-repo, use the repo's own install instead:
+   `npx --no-install knip --config "<folder holding heimdall.config.json>/knip.json"`.
 
 3. **Triage each flagged item.** Do not hide anything you have not
    classified.
@@ -377,15 +394,21 @@ Then:
 An empty diff against the base prints a WARNING in the summary. That is
 expected on a clean branch and is not a failure.
 
-**Prove the setup is clean before you finish.** After the config and
-sibling `knip.json` are in place, run `heimdall` from the project root
-on a branch with **no changes** versus the base (clean working tree, no
-uncommitted or untracked files). Confirm **GREEN**. A **RED** or
-**GATE ERROR** on that run means the setup is not done — fix the config
-or `knip.json` and re-run; do not finish. Existing knip dead-code
-findings (the baseline) do not fail Heimdall: only **new** findings
-count. Tests and typecheck still run in full. The empty-diff WARNING
-above is expected on this run and is not a failure.
+**Prove the setup on a no-change branch.** After the config and sibling
+`knip.json` are in place, run `heimdall` from the project root on a
+branch with **no changes** versus the base (clean working tree, no
+uncommitted or untracked files). Existing knip dead-code findings
+(the baseline) do not fail Heimdall: only **new** findings count.
+Tests and typecheck still run in full. The empty-diff WARNING above is
+expected on this run and is not a failure.
+
+Handle that verdict with the same rules as the rest of Step 4:
+**GREEN** proves the setup. **RED**: paste, explain, tell the user what
+is failing, and ask what they want to do; do not fix code, tests, or
+config without an OK. **GATE ERROR**: stop and report the full error;
+do not work around it (hard rule 6). Do not start another "fix the
+config or knip.json and re-run" loop here. `knip.json` edits belong
+only in the bounded loop above.
 
 ## Step 5: Offer the agent rule
 
@@ -475,19 +498,20 @@ memory, wherever it keeps rules that apply to every coding task.
 
 ## Step 6: Report back
 
-Do not finish until the no-change Heimdall run in Step 4 was **GREEN**.
-A **RED** or **GATE ERROR** there means the setup is not done.
-
 Finish with one block per repo, then a short list of anything left for the
-user to decide:
+user to decide. If the no-change Heimdall run in Step 4 was **GREEN**,
+Result is `GREEN`. If it was **RED** or **GATE ERROR**, follow that
+step's handling (report and ask; do not work around a GATE ERROR) and
+finish with `setup not proven: <reason>` — for example a base-branch
+test failure, a RED finding, or the GATE ERROR text.
 
 ```text
 Repo:        /path/to/my-app
 Config:      $HEIMDALL_HOME/my-app/heimdall.config.json (committed: yes/no)
-Steps:       typecheck, tests, eslint, knip, jscpd, line-checks (knip, jscpd: $HEIMDALL_HOME/node_modules/.bin)
+Steps:       typecheck, tests, eslint, knip, jscpd, line-checks (knip, jscpd: $HEIMDALL_CONFIG_DIR/../node_modules/.bin)
 Protected:   src/generated/** (or: none)
 Setup:       none (or: the setup/teardown commands)
-Result:      GREEN (no-change branch; RED or GATE ERROR means setup is not done)
+Result:      GREEN (no-change branch) (or: setup not proven: tests already fail on the base branch)
 Rule:        Cursor global rule (or: CLAUDE.md in repo, not committed; none)
 Changes in this repo: none (or: exactly what was changed, with the user's OK)
 knip.json additions (each with a one-line reason):
@@ -503,5 +527,4 @@ knip leftover: none (or: the real dead code still reported, listed; never hidden
 ```
 
 For a RED or GATE ERROR, add the findings or the full error, exactly as
-printed, and what you suggest doing next. If that result came from the
-no-change setup-proof run, the setup is not done.
+printed, and what you suggest doing next.

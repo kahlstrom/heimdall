@@ -57,9 +57,9 @@ git (upstream parent, then `main`, then `origin/main`).
 
 Commands for tools the repo already has use `npx --no-install` so a missing
 local binary is a **GATE ERROR** instead of a silent download of an unpinned
-latest. knip and jscpd in the example call the central binaries in
-`$HEIMDALL_HOME/node_modules/.bin` (or `$HOME/.heimdall/node_modules/.bin`
-when configs live in `~/.heimdall` without `$HEIMDALL_HOME`). `$HEIMDALL_TMP`
+latest. knip and jscpd in the example call the central config-home binaries;
+copy those commands from
+[`example/heimdall.config.json`](./example/heimdall.config.json). `$HEIMDALL_TMP`
 is a per-run temp directory; `$HEIMDALL_CONFIG_DIR` is the folder that
 contains the config file that was used. Older `$GATE_TMP` and
 `$GATE_CONFIG_DIR` names are still set as aliases.
@@ -70,14 +70,13 @@ file are a GATE ERROR.
 
 ## Install knip and jscpd once at the config home root
 
-Do not add knip or jscpd to a project repo. Put a `package.json` at the
-Heimdall config home root (`$HEIMDALL_HOME` or `~/.heimdall`) that pins
-`knip` `5.88.1` and `jscpd` `4.3.0`, run `npm install` there, and gitignore
-`node_modules/`. Point `steps.knip` and `steps.jscpd` at those binaries, as
-in [`example/heimdall.config.json`](./example/heimdall.config.json). When the
+Do not add knip or jscpd to a project repo. Exact install steps, the pinned
+versions, and the central-binary command are in
+[`SETUP-WITH-AN-AGENT.md`](../SETUP-WITH-AN-AGENT.md#step-3-write-a-config-for-each-repo).
+Point `steps.knip` and `steps.jscpd` at those binaries, as in
+[`example/heimdall.config.json`](./example/heimdall.config.json). When the
 repo already has knip or jscpd, keep using `npx --no-install` for that tool
-instead. Exact install steps are in
-[`SETUP-WITH-AN-AGENT.md`](../SETUP-WITH-AN-AGENT.md).
+instead.
 
 ## Pin optional tool versions and keep rules files next to the config
 
