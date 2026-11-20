@@ -5,12 +5,14 @@ import { describe, expect, it } from 'vitest';
 import {
   classifyFindingScope,
   configFileInDiff,
+  eslintMetricValue,
   filterFindingsToScope,
   findingsNotInBase,
   identityMessage,
   loadDiffScope,
   mapArchitectureRenameMessage,
   matchFindingKey,
+  noMetric,
   parseChangedNewLines,
   stableEslintMessage,
   toRepoPath,
@@ -208,25 +210,25 @@ describe('findingsNotInBase', () => {
   it('keeps a finding that is not in the base set, even on the same line', () => {
     const current = [hit('src/lib.ts', 'exports', 'helper', 4)];
     const base: Finding[] = [];
-    expect(findingsNotInBase(current, base, keyOf)).toEqual(current);
+    expect(findingsNotInBase(current, base, keyOf, noMetric)).toEqual(current);
   });
 
   it('drops a finding that already existed at the base, ignoring line drift', () => {
     const current = [hit('src/legacy.ts', 'exports', 'leftover', 12)];
     const base = [hit('src/legacy.ts', 'exports', 'leftover', 1)];
-    expect(findingsNotInBase(current, base, keyOf)).toEqual([]);
+    expect(findingsNotInBase(current, base, keyOf, noMetric)).toEqual([]);
   });
 
   it('keeps a second identical finding when the base only has one', () => {
     const current = [hit('src/a.ts', 'no-unused-vars', 'x', 4), hit('src/a.ts', 'no-unused-vars', 'x', 10)];
     const base = [hit('src/a.ts', 'no-unused-vars', 'x', 4)];
-    expect(findingsNotInBase(current, base, keyOf)).toEqual([current[1]]);
+    expect(findingsNotInBase(current, base, keyOf, noMetric)).toEqual([current[1]]);
   });
 
   it('drops two identical findings when the base has both', () => {
     const current = [hit('src/a.ts', 'no-unused-vars', 'x', 4), hit('src/a.ts', 'no-unused-vars', 'x', 10)];
     const base = [hit('src/a.ts', 'no-unused-vars', 'x', 1), hit('src/a.ts', 'no-unused-vars', 'x', 2)];
-    expect(findingsNotInBase(current, base, keyOf)).toEqual([]);
+    expect(findingsNotInBase(current, base, keyOf, noMetric)).toEqual([]);
   });
 
   const renamedScope: DiffScope = {
@@ -242,7 +244,7 @@ describe('findingsNotInBase', () => {
     const base = [hit('src/old.ts', 'exports', 'helper', 1)];
     const renamedKeyOf = (finding: Finding): string =>
       matchFindingKey(finding, renamedScope, SCOPE_ROOT, identityMessage);
-    expect(findingsNotInBase(current, base, renamedKeyOf)).toEqual([]);
+    expect(findingsNotInBase(current, base, renamedKeyOf, noMetric)).toEqual([]);
   });
 
   function architectureHit(file: string, message: string): Finding {
@@ -259,7 +261,7 @@ describe('findingsNotInBase', () => {
   it('maps architecture from -> to path segments through a git rename', () => {
     const current = [architectureHit('src/new.ts', 'src/new.ts -> src/forbidden.ts')];
     const base = [architectureHit('src/old.ts', 'src/old.ts -> src/forbidden.ts')];
-    expect(findingsNotInBase(current, base, architectureKeyOf(renamedScope))).toEqual([]);
+    expect(findingsNotInBase(current, base, architectureKeyOf(renamedScope), noMetric)).toEqual([]);
   });
 
   const nestedRenameScope: DiffScope = {
@@ -272,13 +274,13 @@ describe('findingsNotInBase', () => {
   it('matches a nested-path rename whose old path contains the new path', () => {
     const current = [architectureHit('src/x.ts', 'src/x.ts -> src/forbidden.ts')];
     const base = [architectureHit('packages/core/src/x.ts', 'packages/core/src/x.ts -> src/forbidden.ts')];
-    expect(findingsNotInBase(current, base, architectureKeyOf(nestedRenameScope))).toEqual([]);
+    expect(findingsNotInBase(current, base, architectureKeyOf(nestedRenameScope), noMetric)).toEqual([]);
   });
 
   it('does not rewrite an architecture path that only contains the new path', () => {
     const current = [architectureHit('packages/app/src/x.ts', 'packages/app/src/x.ts -> src/forbidden.ts')];
     const base = [architectureHit('packages/app/src/x.ts', 'packages/app/src/x.ts -> src/forbidden.ts')];
-    expect(findingsNotInBase(current, base, architectureKeyOf(nestedRenameScope))).toEqual([]);
+    expect(findingsNotInBase(current, base, architectureKeyOf(nestedRenameScope), noMetric)).toEqual([]);
   });
 });
 
@@ -341,7 +343,7 @@ describe('stableEslintMessage', () => {
         messageId: 'noShadow',
       }),
     ];
-    expect(findingsNotInBase(current, base, keyOf)).toEqual([]);
+    expect(findingsNotInBase(current, base, keyOf, eslintMetricValue)).toEqual([]);
   });
 
   it("treats a no-shadow finding as the same when the message says 'on line 42' vs 'on line 43'", () => {
@@ -357,39 +359,67 @@ describe('stableEslintMessage', () => {
         messageId: 'noShadow',
       }),
     ];
-    expect(findingsNotInBase(current, base, keyOf)).toEqual([]);
+    expect(findingsNotInBase(current, base, keyOf, eslintMetricValue)).toEqual([]);
   });
 
   it('treats a complexity finding as new when the measured value increases', () => {
     const current = [complexityHit(20)];
     const base = [complexityHit(15)];
-    expect(findingsNotInBase(current, base, keyOf)).toEqual(current);
+    expect(findingsNotInBase(current, base, keyOf, eslintMetricValue)).toEqual(current);
   });
 
   it('treats a complexity finding as the same when the measured value stays the same or drops', () => {
     const base = [complexityHit(15)];
-    expect(findingsNotInBase([complexityHit(15)], base, keyOf)).toEqual([]);
-    expect(findingsNotInBase([complexityHit(12)], base, keyOf)).toEqual([]);
+    expect(findingsNotInBase([complexityHit(15)], base, keyOf, eslintMetricValue)).toEqual([]);
+    expect(findingsNotInBase([complexityHit(12)], base, keyOf, eslintMetricValue)).toEqual([]);
   });
 
   it('pairs same-key metric findings as a multiset of measured values', () => {
     const base = [complexityHit(15, 1), complexityHit(30, 2)];
-    const improved = [complexityHit(29, 1), complexityHit(16, 2)];
+    const mixed = [complexityHit(29, 1), complexityHit(16, 2)];
+    const reversed = [complexityHit(16, 1), complexityHit(29, 2)];
     const worse = [complexityHit(31, 1), complexityHit(15, 2)];
-    expect(findingsNotInBase(improved, base, keyOf)).toEqual([]);
-    expect(findingsNotInBase(worse, base, keyOf)).toEqual([worse[0]]);
+    expect(findingsNotInBase(mixed, base, keyOf, eslintMetricValue)).toEqual([mixed[1]]);
+    expect(findingsNotInBase(reversed, base, keyOf, eslintMetricValue)).toEqual([reversed[0]]);
+    expect(findingsNotInBase(worse, base, keyOf, eslintMetricValue)).toEqual([worse[0]]);
+  });
+
+  it('does not treat equal or lower same-key metrics as new when each has a base slot', () => {
+    const base = [complexityHit(15, 1), complexityHit(30, 2)];
+    expect(findingsNotInBase([complexityHit(15, 1), complexityHit(30, 2)], base, keyOf, eslintMetricValue)).toEqual(
+      [],
+    );
+    expect(findingsNotInBase([complexityHit(12, 1), complexityHit(14, 2)], base, keyOf, eslintMetricValue)).toEqual(
+      [],
+    );
+  });
+
+  it('does not treat a mid-range metric as new when a higher base slot remains', () => {
+    const current = [complexityHit(16)];
+    const base = [complexityHit(15, 1), complexityHit(30, 2)];
+    expect(findingsNotInBase(current, base, keyOf, eslintMetricValue)).toEqual([]);
   });
 
   it('still counts a second metric finding as new when the base only has one', () => {
     const current = [complexityHit(12, 1), complexityHit(12, 2)];
     const base = [complexityHit(15)];
-    expect(findingsNotInBase(current, base, keyOf)).toEqual([current[1]]);
+    expect(findingsNotInBase(current, base, keyOf, eslintMetricValue)).toEqual([current[1]]);
   });
 
   it('does not spend a base slot on a metric finding that got worse', () => {
     const current = [complexityHit(31, 1), complexityHit(12, 2)];
     const base = [complexityHit(15)];
-    expect(findingsNotInBase(current, base, keyOf)).toEqual([current[0]]);
+    expect(findingsNotInBase(current, base, keyOf, eslintMetricValue)).toEqual([current[0]]);
+  });
+
+  it('does not compare a plugin rule by measured value', () => {
+    const current = [
+      eslintHit('Function has a complexity of 20. Maximum allowed is 10.', { rule: '@foo/complexity' }),
+    ];
+    const base = [
+      eslintHit('Function has a complexity of 15. Maximum allowed is 10.', { rule: '@foo/complexity' }),
+    ];
+    expect(findingsNotInBase(current, base, keyOf, eslintMetricValue)).toEqual([]);
   });
 
   it('treats a max-params finding as new when the measured value increases', () => {
@@ -403,13 +433,13 @@ describe('stableEslintMessage', () => {
         rule: 'max-params',
       }),
     ];
-    expect(findingsNotInBase(current, base, keyOf)).toEqual(current);
+    expect(findingsNotInBase(current, base, keyOf, eslintMetricValue)).toEqual(current);
   });
 
   it('keeps unused identifiers that differ only by digits distinct', () => {
     const current = [eslintHit("'foo3' is defined but never used.", { messageId: 'unusedVar' })];
     const base = [eslintHit("'foo2' is defined but never used.", { messageId: 'unusedVar' })];
-    expect(findingsNotInBase(current, base, keyOf)).toEqual(current);
+    expect(findingsNotInBase(current, base, keyOf, eslintMetricValue)).toEqual(current);
   });
 
   it('still counts a second identical eslint finding as new', () => {
@@ -420,7 +450,7 @@ describe('stableEslintMessage', () => {
     const base = [
       eslintHit("'x' is already declared in the upper scope on line 4 column 10.", { line: 4, messageId: 'noShadow' }),
     ];
-    expect(findingsNotInBase(current, base, keyOf)).toEqual([current[1]]);
+    expect(findingsNotInBase(current, base, keyOf, eslintMetricValue)).toEqual([current[1]]);
   });
 });
 

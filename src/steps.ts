@@ -5,11 +5,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { classifyCommandFailure, combinedOutput, type RunCommandFn } from './command.js';
 import {
+  eslintMetricValue,
   filterFindingsToScope,
   findingsNotInBase,
   identityMessage,
   mapArchitectureRenameMessage,
   matchFindingKey,
+  noMetric,
   partitionFindingsByScope,
   relativizeFindingFiles,
   stableEslintMessage,
@@ -353,8 +355,11 @@ async function inScopeOrNewVersusBase(
   }
   const keyOf = eslintMatchKey(ctx);
   return {
-    errors: [...errors.value.inScope, ...findingsNotInBase(errors.value.outOfScope, base.errors, keyOf)],
-    warnings: [...warningIn, ...findingsNotInBase(warningOut, base.warnings, keyOf)],
+    errors: [
+      ...errors.value.inScope,
+      ...findingsNotInBase(errors.value.outOfScope, base.errors, keyOf, eslintMetricValue),
+    ],
+    warnings: [...warningIn, ...findingsNotInBase(warningOut, base.warnings, keyOf, eslintMetricValue)],
   };
 }
 
@@ -408,6 +413,7 @@ function newVsBaseCommandStep(
   name: CommandStepName,
   parse: (output: string) => Result<Finding[]>,
   messageOf: (message: string, renamedFrom: ReadonlyMap<string, string>) => string,
+  metricOf: (finding: Finding) => number | undefined,
 ): GateStep {
   return {
     name,
@@ -434,7 +440,7 @@ function newVsBaseCommandStep(
         matchFindingKey(finding, ctx.scope, ctx.cwd, (message) =>
           currentFindings.has(finding) ? messageOf(message, ctx.scope.renamedFrom) : message,
         );
-      const findings = findingsNotInBase(ran.findings, baseFindings, keyOf);
+      const findings = findingsNotInBase(ran.findings, baseFindings, keyOf, metricOf);
       if (findings.length === 0) {
         return { kind: 'pass', name };
       }
@@ -443,7 +449,7 @@ function newVsBaseCommandStep(
   };
 }
 
-export const knipStep: GateStep = newVsBaseCommandStep('knip', parseKnipOutput, identityMessage);
+export const knipStep: GateStep = newVsBaseCommandStep('knip', parseKnipOutput, identityMessage, noMetric);
 
 /**
  * Materialize the merge-base under HEIMDALL_TMP (itself under os.tmpdir), run
@@ -673,6 +679,7 @@ export const architectureStep: GateStep = newVsBaseCommandStep(
   'architecture',
   parseArchitectureOutput,
   mapArchitectureRenameMessage,
+  noMetric,
 );
 
 /** Parser message plus exit code; never tool stdout or stderr. */

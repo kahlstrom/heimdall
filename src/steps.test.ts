@@ -713,6 +713,68 @@ describe('eslintStep', () => {
     });
   });
 
+  it('fails one of two same-key complexity leftovers when one measured value got worse', async () => {
+    await withEslintRepo(async ({ repo, tmpDir, scope }) => {
+      const file = path.join(repo, 'src/old.ts');
+      const current = JSON.stringify([
+        {
+          filePath: file,
+          messages: [
+            {
+              line: 1,
+              ruleId: 'complexity',
+              messageId: 'complex',
+              message: 'Function has a complexity of 29. Maximum allowed is 10.',
+              severity: 2,
+            },
+            {
+              line: 2,
+              ruleId: 'complexity',
+              messageId: 'complex',
+              message: 'Function has a complexity of 16. Maximum allowed is 10.',
+              severity: 2,
+            },
+          ],
+        },
+      ]);
+      const base = JSON.stringify([
+        {
+          filePath: file,
+          messages: [
+            {
+              line: 1,
+              ruleId: 'complexity',
+              messageId: 'complex',
+              message: 'Function has a complexity of 15. Maximum allowed is 10.',
+              severity: 2,
+            },
+            {
+              line: 2,
+              ruleId: 'complexity',
+              messageId: 'complex',
+              message: 'Function has a complexity of 30. Maximum allowed is 10.',
+              severity: 2,
+            },
+          ],
+        },
+      ]);
+      const step = await eslintStep.run(
+        ctx({
+          cwd: repo,
+          tmpDir,
+          scope,
+          config: cfg({ steps: { eslint: { command: 'npx eslint -f json' } } }),
+          runCommand: eslintTwoShot(current, base),
+        }),
+      );
+      expect(step.kind).toBe('fail');
+      if (step.kind === 'fail') {
+        expect(step.findings).toHaveLength(1);
+        expect(step.findings[0]?.message).toBe('Function has a complexity of 16. Maximum allowed is 10.');
+      }
+    });
+  });
+
   it('passes a complexity finding whose measured value dropped but stayed over the limit', async () => {
     await withEslintRepo(async ({ repo, tmpDir, scope }) => {
       const file = path.join(repo, 'src/old.ts');

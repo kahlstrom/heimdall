@@ -453,11 +453,12 @@ export function identityMessage(message: string): string {
   return message;
 }
 
-/**
- * ESLint core rules whose first standalone number is a measured size or
- * complexity. Matching still uses the digit-stripped key; a leftover is new
- * when that measured value is higher than every remaining same-key base finding.
- */
+/** No measured-value comparison (knip, architecture). */
+export function noMetric(): undefined {
+  return undefined;
+}
+
+/** ESLint core rules whose first standalone number is a measured size or complexity. */
 const ESLINT_METRIC_RULES: ReadonlySet<string> = new Set([
   'complexity',
   'max-depth',
@@ -485,45 +486,44 @@ function firstStandaloneNumber(message: string): number | undefined {
   return Number.parseInt(match[0], 10);
 }
 
-function eslintMetricValue(finding: Finding): number | undefined {
-  if (finding.step !== 'eslint' || !ESLINT_METRIC_RULES.has(finding.rule)) {
+/**
+ * First standalone number for ESLint core metric rules. Other findings
+ * return undefined so they compare as a plain identity multiset.
+ */
+export function eslintMetricValue(finding: Finding): number | undefined {
+  if (!ESLINT_METRIC_RULES.has(finding.rule)) {
     return undefined;
   }
   return firstStandaloneNumber(finding.message);
 }
 
-/** Highest measured value per match key among ESLint metric findings. */
-function highestMetricByKey(
-  findings: readonly Finding[],
-  keyOf: (finding: Finding) => string,
-): Map<string, number> {
-  const highest = new Map<string, number>();
-  for (const finding of findings) {
-    const measured = eslintMetricValue(finding);
-    if (measured === undefined) {
+/**
+ * Maximum pairing of current metric findings against remaining same-key base
+ * values: sort both descending and greedily pair a current value with the
+ * next base value that is at least as high. Unpaired currents are new.
+ */
+function unpairedMetricFindings(
+  current: readonly Finding[],
+  baseValues: readonly number[],
+  metricOf: (finding: Finding) => number | undefined,
+): Finding[] {
+  const ranked = current.flatMap((finding) => {
+    const measured = metricOf(finding);
+    return measured === undefined ? [] : [{ finding, measured }];
+  });
+  ranked.sort((left, right) => right.measured - left.measured);
+  const remainingBase = [...baseValues].sort((left, right) => right - left);
+  let nextBase = 0;
+  const unpaired: Finding[] = [];
+  for (const { finding, measured } of ranked) {
+    const ceiling = remainingBase[nextBase];
+    if (ceiling !== undefined && ceiling >= measured) {
+      nextBase += 1;
       continue;
     }
-    const id = keyOf(finding);
-    const previous = highest.get(id);
-    if (previous === undefined || measured > previous) {
-      highest.set(id, measured);
-    }
+    unpaired.push(finding);
   }
-  return highest;
-}
-
-/** True when a metric leftover is worse than every same-key merge-base value. */
-function exceedsMetricBase(
-  finding: Finding,
-  id: string,
-  highestMetric: ReadonlyMap<string, number>,
-): boolean {
-  const measured = eslintMetricValue(finding);
-  if (measured === undefined) {
-    return false;
-  }
-  const ceiling = highestMetric.get(id);
-  return ceiling !== undefined && measured > ceiling;
+  return unpaired;
 }
 
 /**
@@ -564,31 +564,68 @@ export function matchFindingKey(
 
 /**
  * Findings in `current` with no matching identity in `base`, compared as a
- * multiset: a second identical key is new. For ESLint core metric rules, a
- * current finding only matches a remaining same-key base finding whose
- * measured value (first standalone number) is at least as high.
+ * multiset: a second identical key is new. When `metricOf` returns a measured
+ * value, a current finding is not new only if it pairs with its own distinct
+ * same-key base finding whose value is at least as high. Pairing is a maximum
+ * matching (sort both sides descending and greedily pair), so the number
+ * flagged is the fewest that must have gotten worse.
  */
 export function findingsNotInBase(
   current: readonly Finding[],
   base: readonly Finding[],
   keyOf: (finding: Finding) => string,
+  metricOf: (finding: Finding) => number | undefined,
 ): Finding[] {
-  const remaining = new Map<string, number>();
+  const remainingCounts = new Map<string, number>();
+  const baseMetrics = new Map<string, number[]>();
   for (const finding of base) {
     const id = keyOf(finding);
-    remaining.set(id, (remaining.get(id) ?? 0) + 1);
-  }
-  const highestMetric = highestMetricByKey(base, keyOf);
-  const extra: Finding[] = [];
-  for (const finding of current) {
-    const id = keyOf(finding);
-    if (exceedsMetricBase(finding, id, highestMetric)) {
-      extra.push(finding);
+    const measured = metricOf(finding);
+    if (measured === undefined) {
+      remainingCounts.set(id, (remainingCounts.get(id) ?? 0) + 1);
       continue;
     }
-    const count = remaining.get(id) ?? 0;
+    const values = baseMetrics.get(id);
+    if (values === undefined) {
+      baseMetrics.set(id, [measured]);
+    } else {
+      values.push(measured);
+    }
+  }
+
+  const currentMetrics = new Map<string, Finding[]>();
+  for (const finding of current) {
+    if (metricOf(finding) === undefined) {
+      continue;
+    }
+    const id = keyOf(finding);
+    const group = currentMetrics.get(id);
+    if (group === undefined) {
+      currentMetrics.set(id, [finding]);
+    } else {
+      group.push(finding);
+    }
+  }
+
+  const unpaired = new Set<Finding>();
+  for (const [id, group] of currentMetrics) {
+    for (const finding of unpairedMetricFindings(group, baseMetrics.get(id) ?? [], metricOf)) {
+      unpaired.add(finding);
+    }
+  }
+
+  const extra: Finding[] = [];
+  for (const finding of current) {
+    if (metricOf(finding) !== undefined) {
+      if (unpaired.has(finding)) {
+        extra.push(finding);
+      }
+      continue;
+    }
+    const id = keyOf(finding);
+    const count = remainingCounts.get(id) ?? 0;
     if (count > 0) {
-      remaining.set(id, count - 1);
+      remainingCounts.set(id, count - 1);
       continue;
     }
     extra.push(finding);
