@@ -140,6 +140,9 @@ export function formatReport(outcome: GateOutcome): string {
     lines.push(`config:   ${outcome.configPath}${commit}`);
   }
   lines.push(`base:     ${outcome.baseRef ?? '(none)'}`);
+  if (outcome.headSha) {
+    lines.push(`head:     ${outcome.headSha}`);
+  }
   if (outcome.mergeBaseSha) {
     lines.push(`commit:   ${outcome.mergeBaseSha}`);
   }

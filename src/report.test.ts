@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 import { emptyDiffWarning, exitCodeLabel, formatFinding, formatReport, formatRunPrelude, unversionedConfigWarning } from './report.js';
 import { EXIT_GATE_ERROR, EXIT_GREEN, EXIT_RED, type GateOutcome } from './types.js';
 
+const HEAD_SHA = 'fedcba9876543210fedcba9876543210fedcba98';
+const MERGE_BASE_SHA = 'abc123def';
+const FULL_MERGE_BASE_SHA = '0123456789abcdef0123456789abcdef01234567';
+
 describe('formatFinding', () => {
   it('prints file:line [rule] message', () => {
     expect(
@@ -88,7 +92,8 @@ describe('formatReport', () => {
       kind: 'green',
       exitCode: EXIT_GREEN,
       baseRef: 'main',
-      mergeBaseSha: 'abc123def',
+      mergeBaseSha: MERGE_BASE_SHA,
+      headSha: HEAD_SHA,
       warnings: [],
       steps: [{ kind: 'pass', name: 'tests' }],
     };
@@ -97,6 +102,7 @@ describe('formatReport', () => {
     expect(text).toMatch(/exit:\s+0/);
     expect(text).toMatch(/tests\s+pass/);
     expect(text).toMatch(/HEIMDALL SUMMARY/);
+    expect(text).toContain(`head:     ${HEAD_SHA}`);
   });
 
   it('prints the config file that was used', () => {
@@ -104,7 +110,8 @@ describe('formatReport', () => {
       kind: 'green',
       exitCode: EXIT_GREEN,
       baseRef: 'main',
-      mergeBaseSha: 'abc123def',
+      mergeBaseSha: MERGE_BASE_SHA,
+      headSha: HEAD_SHA,
       configPath: '/Users/me/.heimdall/my-app/heimdall.config.json',
       warnings: [],
       steps: [{ kind: 'pass', name: 'tests' }],
@@ -119,7 +126,8 @@ describe('formatReport', () => {
       kind: 'green',
       exitCode: EXIT_GREEN,
       baseRef: 'main',
-      mergeBaseSha: 'abc123def',
+      mergeBaseSha: MERGE_BASE_SHA,
+      headSha: HEAD_SHA,
       configPath: '/tmp/heimdall-home/my-app/heimdall.config.json',
       configCommit: '0123456789abcdef0123456789abcdef01234567',
       warnings: [],
@@ -137,7 +145,8 @@ describe('formatReport', () => {
       kind: 'green',
       exitCode: EXIT_GREEN,
       baseRef: 'main',
-      mergeBaseSha: 'abc123def',
+      mergeBaseSha: MERGE_BASE_SHA,
+      headSha: HEAD_SHA,
       configPath: `${configDir}/heimdall.config.json`,
       warnings: [unversionedConfigWarning(configDir)],
       steps: [{ kind: 'pass', name: 'tests' }],
@@ -146,28 +155,36 @@ describe('formatReport', () => {
     expect(text).toMatch(/WARNING:\s+config is not version-controlled \(\/Users\/me\/\.heimdall\/my-app\)/);
   });
 
-  it('prints the resolved base branch and commit', () => {
+  it('prints the resolved base branch, HEAD, and commit', () => {
     const outcome: GateOutcome = {
       kind: 'green',
       exitCode: EXIT_GREEN,
       baseRef: 'feat/gate-v1',
-      mergeBaseSha: '0123456789abcdef0123456789abcdef01234567',
+      mergeBaseSha: FULL_MERGE_BASE_SHA,
+      headSha: HEAD_SHA,
+      baseSha: 'aaaabbbbccccddddeeeeffff0000111122223333',
       warnings: [],
       steps: [{ kind: 'pass', name: 'tests' }],
     };
     const text = formatReport(outcome);
     expect(text).toMatch(/base:\s+feat\/gate-v1/);
+    expect(text).toContain(`head:     ${HEAD_SHA}`);
     expect(text).toMatch(/commit:\s+0123456789abcdef0123456789abcdef01234567/);
+    expect(text).toMatch(/resolved:\s+aaaabbbbccccddddeeeeffff0000111122223333/);
+    expect(text.indexOf('base:')).toBeLessThan(text.indexOf('head:'));
+    expect(text.indexOf('head:')).toBeLessThan(text.indexOf('commit:'));
+    expect(text.indexOf('commit:')).toBeLessThan(text.indexOf('resolved:'));
   });
 
   it('prints a loud empty-diff warning naming the base', () => {
     const base = 'feat/gate-v1';
-    const sha = '0123456789abcdef0123456789abcdef01234567';
+    const sha = FULL_MERGE_BASE_SHA;
     const outcome: GateOutcome = {
       kind: 'green',
       exitCode: EXIT_GREEN,
       baseRef: base,
       mergeBaseSha: sha,
+      headSha: HEAD_SHA,
       warnings: [emptyDiffWarning(base, sha)],
       steps: [{ kind: 'pass', name: 'tests' }],
     };
@@ -182,7 +199,8 @@ describe('formatReport', () => {
       kind: 'red',
       exitCode: EXIT_RED,
       baseRef: 'main',
-      mergeBaseSha: 'abc123def',
+      mergeBaseSha: MERGE_BASE_SHA,
+      headSha: HEAD_SHA,
       warnings: [],
       steps: [
         {
@@ -196,6 +214,7 @@ describe('formatReport', () => {
     expect(text.indexOf('src/a.ts:2')).toBeLessThan(text.indexOf('HEIMDALL SUMMARY'));
     expect(text).toMatch(/result:\s+RED/);
     expect(text).toMatch(/exit:\s+1/);
+    expect(text).toContain(`head:     ${HEAD_SHA}`);
   });
 
   it('prints secrets findings as rule id plus file:line and never the secretlint message', () => {
@@ -204,7 +223,8 @@ describe('formatReport', () => {
       kind: 'red',
       exitCode: EXIT_RED,
       baseRef: 'main',
-      mergeBaseSha: 'abc123def',
+      mergeBaseSha: MERGE_BASE_SHA,
+      headSha: HEAD_SHA,
       warnings: [],
       steps: [
         {
@@ -235,6 +255,7 @@ describe('formatReport', () => {
       reason: 'invalid heimdall.config.json: steps.eslint.command must be a non-empty string',
       baseRef: undefined,
       mergeBaseSha: undefined,
+      headSha: undefined,
       warnings: [],
       steps: [],
     };
@@ -243,6 +264,7 @@ describe('formatReport', () => {
     expect(text).toMatch(/result:\s+GATE ERROR/);
     expect(text).toMatch(/exit:\s+2/);
     expect(text).not.toMatch(/result:\s+RED/);
+    expect(text).not.toMatch(/^head:/m);
   });
 });
 
@@ -263,6 +285,7 @@ describe('formatReport completeness', () => {
       reason: 'knip output is not JSON',
       baseRef: 'main',
       mergeBaseSha: 'abc',
+      headSha: HEAD_SHA,
       baseSha: 'def',
       changedFileCount: 2,
       addedLineCount: 4,
@@ -280,6 +303,7 @@ describe('formatReport completeness', () => {
     expect(text.indexOf('src/a.ts:2')).toBeLessThan(text.indexOf('HEIMDALL SUMMARY'));
     expect(text).toMatch(/knip\s+GATE ERROR\s+\(knip output is not JSON\)/);
     expect(text).toMatch(/scope:\s+2 files, 4 added lines/);
+    expect(text).toContain(`head:     ${HEAD_SHA}`);
     expect(text).toMatch(/resolved:\s+def/);
     expect(text).toMatch(/findings:\s+1/);
   });
@@ -290,6 +314,7 @@ describe('formatReport completeness', () => {
       exitCode: EXIT_GREEN,
       baseRef: 'main',
       mergeBaseSha: 'abc',
+      headSha: HEAD_SHA,
       warnings: [],
       steps: [
         {

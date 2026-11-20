@@ -145,6 +145,8 @@ export type GateOutcome =
       readonly exitCode: typeof EXIT_GREEN;
       readonly baseRef: string;
       readonly mergeBaseSha: string;
+      /** Full `git rev-parse HEAD` sha the gate ran on. */
+      readonly headSha: string;
       readonly warnings: readonly string[];
       readonly steps: readonly StepResult[];
     } & OutcomeScope)
@@ -153,6 +155,8 @@ export type GateOutcome =
       readonly exitCode: typeof EXIT_RED;
       readonly baseRef: string;
       readonly mergeBaseSha: string;
+      /** Full `git rev-parse HEAD` sha the gate ran on. */
+      readonly headSha: string;
       readonly warnings: readonly string[];
       readonly steps: readonly StepResult[];
     } & OutcomeScope)
@@ -162,6 +166,8 @@ export type GateOutcome =
       readonly reason: string;
       readonly baseRef: string | undefined;
       readonly mergeBaseSha: string | undefined;
+      /** Present only when HEAD was already resolved; omitted on empty repos. */
+      readonly headSha: string | undefined;
       readonly warnings: readonly string[];
       readonly steps: readonly StepResult[];
     } & OutcomeScope);

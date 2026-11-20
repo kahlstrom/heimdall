@@ -136,10 +136,23 @@ describe('runGate exit codes', () => {
       expect(outcome.exitCode).toBe(2);
       if (outcome.kind === 'error') {
         expect(outcome.reason).toMatch(/not a git repository/);
+        expect(outcome.headSha).toBeUndefined();
       }
+      expect(formatReport(outcome)).not.toMatch(/^head:/m);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+
+  it('omits the head summary line when the repo has no commits', async () => {
+    await withTempRepo(async (repo) => {
+      writeGateConfig(repo, PASSING_TESTS_CONFIG);
+      const outcome = await runGate({ cwd: repo, ...mockPass() });
+      expect(outcome.kind).toBe('error');
+      expect(outcome.exitCode).toBe(2);
+      expect(outcome.headSha).toBeUndefined();
+      expect(formatReport(outcome)).not.toMatch(/^head:/m);
+    });
   });
 
   it('returns green when every enabled step passes', async () => {
@@ -148,6 +161,9 @@ describe('runGate exit codes', () => {
       expect(outcome.kind).toBe('green');
       expect(outcome.exitCode).toBe(0);
       expectSameFile(outcome.configPath, path.join(repo, 'heimdall.config.json'));
+      const headSha = git(repo, ['rev-parse', 'HEAD']).trim();
+      expect(outcome.headSha).toBe(headSha);
+      expect(formatReport(outcome)).toContain(`head:     ${headSha}`);
     });
   });
 
@@ -169,6 +185,9 @@ describe('runGate exit codes', () => {
       });
       expect(outcome.kind).toBe('red');
       expect(outcome.exitCode).toBe(1);
+      const headSha = git(repo, ['rev-parse', 'HEAD']).trim();
+      expect(outcome.headSha).toBe(headSha);
+      expect(formatReport(outcome)).toContain(`head:     ${headSha}`);
       const findings = failFindings(outcome);
       expect(findings).toHaveLength(1);
       expect(findings[0]?.file).toMatch(/src\/new\.ts$/);
@@ -1269,6 +1288,9 @@ describe('runGate base guard', () => {
         if (outcome.kind === 'error') {
           expect(outcome.reason).toMatch(/changed file count 2 is above maxChangedFiles 1 \(base main\)/);
         }
+        const headSha = git(repo, ['rev-parse', 'HEAD']).trim();
+        expect(outcome.headSha).toBe(headSha);
+        expect(formatReport(outcome)).toContain(`head:     ${headSha}`);
         expect(outcome.changedFileCount).toBe(2);
       }, ['HEIMDALL_ALLOW_WIDE', 'GATE_ALLOW_WIDE']);
     });

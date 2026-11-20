@@ -115,6 +115,7 @@ function gateError(
   warnings: readonly string[] = [],
   scope?: DiffScope,
   baseSha?: string,
+  headSha?: string,
 ): GateOutcome {
   const outcome: GateOutcome = {
     kind: 'error',
@@ -122,6 +123,7 @@ function gateError(
     reason,
     baseRef,
     mergeBaseSha,
+    headSha,
     warnings,
     steps,
   };
@@ -159,7 +161,7 @@ function outcomeFromSteps(
   const error = steps.find((step) => step.kind === 'error');
   if (error && error.kind === 'error') {
     return withConfigPath(
-      gateError(error.reason, base.spec, steps, base.mergeBaseSha, warnings, scope, base.sha),
+      gateError(error.reason, base.spec, steps, base.mergeBaseSha, warnings, scope, base.sha, base.headSha),
       configPath,
       configCommit,
     );
@@ -178,6 +180,7 @@ function outcomeFromSteps(
           exitCode: EXIT_RED,
           baseRef: base.spec,
           mergeBaseSha: base.mergeBaseSha,
+          headSha: base.headSha,
           warnings,
           steps,
         },
@@ -195,6 +198,7 @@ function outcomeFromSteps(
         exitCode: EXIT_GREEN,
         baseRef: base.spec,
         mergeBaseSha: base.mergeBaseSha,
+        headSha: base.headSha,
         warnings,
         steps,
       },
@@ -371,7 +375,16 @@ export async function runGate(options: RunGateOptions): Promise<GateOutcome> {
   const scope = loadDiffScope(repoRoot, base.value);
   if (!scope.ok) {
     return withConfigPath(
-      gateError(scope.error, base.value.spec, [], base.value.mergeBaseSha, deprecations),
+      gateError(
+        scope.error,
+        base.value.spec,
+        [],
+        base.value.mergeBaseSha,
+        deprecations,
+        undefined,
+        undefined,
+        base.value.headSha,
+      ),
       configPath,
     );
   }
@@ -395,6 +408,7 @@ export async function runGate(options: RunGateOptions): Promise<GateOutcome> {
         deprecations,
         scope.value,
         base.value.sha,
+        base.value.headSha,
       ),
       configPath,
     );
@@ -409,7 +423,16 @@ export async function runGate(options: RunGateOptions): Promise<GateOutcome> {
   });
   if (wide.kind === 'error') {
     return withConfigPath(
-      gateError(wide.reason, base.value.spec, [], base.value.mergeBaseSha, warnings, scope.value, base.value.sha),
+      gateError(
+        wide.reason,
+        base.value.spec,
+        [],
+        base.value.mergeBaseSha,
+        warnings,
+        scope.value,
+        base.value.sha,
+        base.value.headSha,
+      ),
       configPath,
     );
   }
@@ -428,7 +451,16 @@ export async function runGate(options: RunGateOptions): Promise<GateOutcome> {
   const locked = lockExternalConfig(configPath, repoRoot, processEnv);
   if (!locked.ok) {
     return withConfigPath(
-      gateError(locked.error, base.value.spec, [], base.value.mergeBaseSha, warnings, scope.value, base.value.sha),
+      gateError(
+        locked.error,
+        base.value.spec,
+        [],
+        base.value.mergeBaseSha,
+        warnings,
+        scope.value,
+        base.value.sha,
+        base.value.headSha,
+      ),
       configPath,
     );
   }

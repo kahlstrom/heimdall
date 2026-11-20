@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { HELP, main, parseArgs } from './main.js';
-import { commitAll, withTempRepo, writeRepoFile } from '../test/helpers/temp-repo.js';
+import { commitAll, git, withTempRepo, writeRepoFile } from '../test/helpers/temp-repo.js';
 
 describe('parseArgs', () => {
   it('returns run with no args', () => {
@@ -108,6 +108,7 @@ describe('main', () => {
       expect(text.indexOf('merge-base:')).toBeLessThan(text.indexOf('HEIMDALL SUMMARY'));
       expect(text.indexOf('changed files:')).toBeLessThan(text.indexOf('HEIMDALL SUMMARY'));
       expect(text).toMatch(/base:\s+main \(from --base\)/);
+      expect(text).toContain(`head:     ${git(repo, ['rev-parse', 'HEAD']).trim()}`);
       expect(text).toMatch(/GREEN/);
     });
   });

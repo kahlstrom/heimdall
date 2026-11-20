@@ -208,7 +208,8 @@ At least one step must be enabled.
 Every run prints the resolved **base** and where it came from (`--base`,
 config, upstream, or fallback), the merge-base **short sha**, and the
 **changed-file count** before setup and steps. The final `HEIMDALL SUMMARY`
-still includes the `base:` line.
+still includes the `base:` line and a `head:` line with the full sha the gate
+ran on.
 
 ### `steps.<name>` command steps
 
@@ -488,6 +489,7 @@ result:   RED
 exit:     1
 config:   /Users/me/dev/my-app/heimdall.config.json
 base:     main
+head:     b2c3d4e5f6789012345678901234567890abcdef
 commit:   a1b2c3d4e5f6789012345678901234567890abcd
 scope:    3 files, 40 added lines
 eslint       FAIL  (1)

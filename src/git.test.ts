@@ -48,6 +48,7 @@ describe('resolveBaseRef', () => {
       expect(resolved.ok).toBe(true);
       if (resolved.ok) {
         expect(resolved.value.spec).toBe('main');
+        expect(resolved.value.headSha).toBe(git(repo, ['rev-parse', 'HEAD']).trim());
       }
     });
   });
@@ -208,6 +209,16 @@ describe('resolveBaseRef', () => {
       if (!cli.ok) {
         expect(cli.error).toMatch(/--base/);
         expect(cli.error).toMatch(/no-such-base/);
+      }
+    });
+  });
+
+  it('errors when HEAD cannot be resolved', async () => {
+    await withTempRepo(async (repo) => {
+      const resolved = resolveBaseRef(repo, undefined);
+      expect(resolved.ok).toBe(false);
+      if (!resolved.ok) {
+        expect(resolved.error).toMatch(/cannot resolve HEAD/);
       }
     });
   });

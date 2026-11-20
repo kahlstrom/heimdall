@@ -483,6 +483,8 @@ export type ResolvedBaseRef = {
   readonly sha: string;
   readonly mergeBaseSha: string;
   readonly source: BaseRefSource;
+  /** Full `git rev-parse HEAD` sha; printed as `head:` in the summary. */
+  readonly headSha: string;
 };
 
 function verifyRef(cwd: string, spec: string): Result<string> {
@@ -612,7 +614,7 @@ export function resolveBaseRef(
   configured: string | undefined,
   cliBase?: string,
 ): Result<ResolvedBaseRef> {
-  const head = verifyRef(cwd, 'HEAD');
+  const head = gitHeadSha(cwd);
   if (!head.ok) {
     return err(`cannot resolve HEAD: ${head.error}`);
   }
@@ -656,5 +658,6 @@ export function resolveBaseRef(
     sha,
     mergeBaseSha: mergeBase.value.trim(),
     source,
+    headSha: head.value,
   });
 }
