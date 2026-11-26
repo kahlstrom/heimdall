@@ -113,6 +113,17 @@ npm link
 After `npm link`, `heimdall` is on your PATH. To unlink later:
 `npm unlink -g @kahlstrom/heimdall`.
 
+## Upgrading from 0.1.0
+
+**ESLint can turn a previously GREEN repo RED.** In 0.1.0, only findings on
+added lines counted. In 0.2.0, a finding on an untouched line also fails the
+step if it is new versus the merge-base (for example an import left unused
+after its last use is deleted). Errors always count this way; warnings do
+when `maxWarnings` is set. Run `heimdall` once after upgrading to see whether
+that applies.
+
+Full notes for 0.2.0 are in [CHANGELOG.md](./CHANGELOG.md).
+
 ## Getting started
 
 1. Copy [`configs/example/heimdall.config.json`](./configs/example/heimdall.config.json)
