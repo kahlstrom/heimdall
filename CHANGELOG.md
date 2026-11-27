@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-11-27
+
 ### Added
 
 - `steps.line-checks.commentPatterns` (default `[]`): array of regex strings
@@ -45,6 +47,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   when the branch has no findings). `SETUP-WITH-AN-AGENT.md` adds a step for
   `!` production markers, central-binary and in-repo commands, the no-change
   GREEN check, and report fields.
+
+### Fixed
+
+- A `line-checks` suppression finding on a line that also carries a
+  secret-scanner comment (`gitleaks:allow` or any `secretlint-disable`
+  form) prints only the suppression kind, never the line text, even when
+  `steps.secrets` is off. Previously, with secrets off, such a line could
+  print in full.
+
+### Upgrading
+
+`test-import` and `test-env` are on by default whenever `line-checks` is
+enabled. They flag only added lines in non-test files, so existing code
+does not turn RED, but a new branch that imports test code or checks for
+a test runner from production code will. Adjust `testGlobs`, or use
+`steps.line-checks.allowTestImports` for shared test helpers.
 
 ## [0.2.0] - 2026-11-26
 
