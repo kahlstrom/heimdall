@@ -85,6 +85,7 @@ export type LineChecksConfig = {
   readonly allowSilencing: readonly string[];
   readonly allowTestImports: readonly string[];
   readonly commentPatterns: readonly RegExp[];
+  readonly testEnvNames: readonly string[];
 };
 
 export type GateConfig = {

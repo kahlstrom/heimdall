@@ -56,10 +56,21 @@ const JS_TO_TS_EXTENSIONS: Readonly<Record<string, readonly string[]>> = {
   '.cjs': ['.cjs', '.cts'],
 };
 
+const PROCESS_TEST_ENV_NAMES = new Set(['VITEST', 'JEST_WORKER_ID']);
+const IMPORT_META_TEST_ENV_NAMES = new Set(['VITEST']);
+const TEST_ENV_EQUALITY_OPS = new Set<ts.SyntaxKind>([
+  ts.SyntaxKind.EqualsEqualsEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsEqualsToken,
+  ts.SyntaxKind.EqualsEqualsToken,
+  ts.SyntaxKind.ExclamationEqualsToken,
+]);
+
 export type ScanAddedSourceOptions = {
   readonly extras?: boolean;
   readonly noSilencing?: boolean;
   readonly testImports?: boolean;
+  readonly testEnv?: boolean;
+  readonly testEnvNames?: readonly string[];
   readonly testGlobs?: readonly string[];
   readonly repoRoot?: string;
   /** When true, also flag new secretlint-disable / gitleaks:allow comments. */
@@ -72,6 +83,7 @@ export type LineCheckOptions = {
   readonly extras?: boolean;
   readonly allowSilencing?: readonly string[];
   readonly allowTestImports?: readonly string[];
+  readonly testEnvNames?: readonly string[];
   readonly testGlobs?: readonly string[];
   readonly secrets?: boolean;
   readonly commentPatterns?: readonly RegExp[];
@@ -403,6 +415,87 @@ function importSpecifierNode(node: ts.Node): ts.StringLiteralLike | undefined {
   return undefined;
 }
 
+function memberAccess(
+  expression: ts.Expression,
+): { readonly object: ts.Expression; readonly property: string } | undefined {
+  const unwrapped = unwrapParens(expression);
+  if (ts.isPropertyAccessExpression(unwrapped)) {
+    return { object: unwrapped.expression, property: unwrapped.name.text };
+  }
+  if (ts.isElementAccessExpression(unwrapped)) {
+    const literal = stringLiteralLike(unwrapParens(unwrapped.argumentExpression));
+    if (literal !== undefined) {
+      return { object: unwrapped.expression, property: literal.text };
+    }
+  }
+  return undefined;
+}
+
+function isImportMeta(expression: ts.Expression): boolean {
+  const unwrapped = unwrapParens(expression);
+  return (
+    ts.isMetaProperty(unwrapped) &&
+    unwrapped.keywordToken === ts.SyntaxKind.ImportKeyword &&
+    unwrapped.name.text === 'meta'
+  );
+}
+
+function isProcessEnv(expression: ts.Expression): boolean {
+  const access = memberAccess(expression);
+  if (access === undefined || access.property !== 'env') {
+    return false;
+  }
+  const root = unwrapParens(access.object);
+  return ts.isIdentifier(root) && root.text === 'process';
+}
+
+function isImportMetaEnv(expression: ts.Expression): boolean {
+  const access = memberAccess(expression);
+  return access !== undefined && access.property === 'env' && isImportMeta(access.object);
+}
+
+function isComparedTestEnvAccess(expression: ts.Expression, customNames: ReadonlySet<string>): boolean {
+  const access = memberAccess(expression);
+  if (access === undefined) {
+    return false;
+  }
+  if (isProcessEnv(access.object) && access.property === 'NODE_ENV') {
+    return !customNames.has('NODE_ENV');
+  }
+  if (isImportMetaEnv(access.object) && access.property === 'MODE') {
+    return !customNames.has('MODE');
+  }
+  return false;
+}
+
+function isTestStringLiteral(expression: ts.Expression): boolean {
+  const literal = stringLiteralLike(unwrapParens(expression));
+  return literal !== undefined && literal.text === 'test';
+}
+
+function isTestEnvExpression(node: ts.Node, customNames: ReadonlySet<string>): boolean {
+  if (ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node)) {
+    const access = memberAccess(node);
+    if (access === undefined) {
+      return false;
+    }
+    if (isProcessEnv(access.object)) {
+      return PROCESS_TEST_ENV_NAMES.has(access.property) || customNames.has(access.property);
+    }
+    if (isImportMetaEnv(access.object)) {
+      return IMPORT_META_TEST_ENV_NAMES.has(access.property) || customNames.has(access.property);
+    }
+    return isImportMeta(access.object) && access.property === 'vitest';
+  }
+  if (ts.isBinaryExpression(node) && TEST_ENV_EQUALITY_OPS.has(node.operatorToken.kind)) {
+    return (
+      (isComparedTestEnvAccess(node.left, customNames) && isTestStringLiteral(node.right)) ||
+      (isTestStringLiteral(node.left) && isComparedTestEnvAccess(node.right, customNames))
+    );
+  }
+  return false;
+}
+
 /**
  * Scan one file's added lines for rule-gaming hits.
  */
@@ -415,7 +508,10 @@ export function scanAddedSource(
   const extras = options.extras !== false;
   const noSilencing = options.noSilencing !== false;
   const testGlobs = options.testGlobs ?? DEFAULT_TEST_GLOBS;
-  const testImports = options.testImports !== false && !isTestFile(filePath, testGlobs);
+  const isNonTestFile = !isTestFile(filePath, testGlobs);
+  const testImports = options.testImports !== false && isNonTestFile;
+  const testEnv = options.testEnv !== false && isNonTestFile;
+  const customTestEnvNames = new Set(options.testEnvNames ?? []);
   const repoRoot = options.repoRoot;
   const secrets = options.secrets === true;
   const commentPatterns = options.commentPatterns ?? [];
@@ -443,7 +539,7 @@ export function scanAddedSource(
     }
   }
 
-  if (!extras && !noSilencing && !testImports) {
+  if (!extras && !noSilencing && !testImports && !testEnv) {
     return hits;
   }
 
@@ -497,6 +593,9 @@ export function scanAddedSource(
         }
       }
     }
+    if (testEnv && onAdded && isTestEnvExpression(node, customTestEnvNames)) {
+      push(hits, filePath, line, 'test-env', node.getText(sourceFile));
+    }
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
@@ -511,6 +610,7 @@ export function runLineChecks(
   const extras = options.extras !== false;
   const allowSilencing = options.allowSilencing ?? [];
   const allowTestImports = options.allowTestImports ?? [];
+  const testEnvNames = options.testEnvNames ?? [];
   const testGlobs = options.testGlobs ?? DEFAULT_TEST_GLOBS;
   const secrets = options.secrets === true;
   const commentPatterns = options.commentPatterns ?? [];
@@ -520,13 +620,14 @@ export function runLineChecks(
       continue;
     }
     const isSource = SOURCE_FILE_EXT_RE.test(filePath);
+    const isNonTestSource = isSource && !isTestFile(filePath, testGlobs);
     const extrasOn = extras && isSource;
     const noSilencingOn =
       NO_SILENCING_FILE_EXT_RE.test(filePath) && !matchesAnyGlob(filePath, allowSilencing);
-    const testImportsOn =
-      isSource && !isTestFile(filePath, testGlobs) && !matchesAnyGlob(filePath, allowTestImports);
+    const testImportsOn = isNonTestSource && !matchesAnyGlob(filePath, allowTestImports);
+    const testEnvOn = isNonTestSource;
     const commentPatternsOn = commentPatterns.length > 0 && isSource;
-    if (!extrasOn && !noSilencingOn && !testImportsOn && !commentPatternsOn) {
+    if (!extrasOn && !noSilencingOn && !testImportsOn && !testEnvOn && !commentPatternsOn) {
       continue;
     }
     const abs = path.join(repoRoot, filePath);
@@ -540,6 +641,8 @@ export function runLineChecks(
       extras: extrasOn,
       noSilencing: noSilencingOn,
       testImports: testImportsOn,
+      testEnv: testEnvOn,
+      testEnvNames,
       testGlobs,
       repoRoot,
       secrets,

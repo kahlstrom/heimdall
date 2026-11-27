@@ -395,7 +395,8 @@ describe('commentPatterns', () => {
   });
 });
 
-function testImportHits(
+function ruleHits(
+  rule: string,
   filePath: string,
   sourceText: string,
   addedLines: ReadonlySet<number>,
@@ -405,7 +406,53 @@ function testImportHits(
     extras: false,
     noSilencing: false,
     ...options,
-  }).filter((hit) => hit.rule === 'test-import');
+  }).filter((hit) => hit.rule === rule);
+}
+
+async function withTempFiles(
+  prefix: string,
+  files: Readonly<Record<string, string>>,
+  fn: (dir: string) => Promise<void>,
+): Promise<void> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  try {
+    for (const [relPath, content] of Object.entries(files)) {
+      const fullPath = path.join(dir, relPath);
+      fs.mkdirSync(path.dirname(fullPath), { recursive: true });
+      fs.writeFileSync(fullPath, content);
+    }
+    await fn(dir);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function stepFindings(result: Awaited<ReturnType<typeof lineChecksStep.run>>) {
+  return result.kind === 'fail' ? result.findings : [];
+}
+
+function runLineChecksStep(
+  dir: string,
+  config: ReturnType<typeof parseTestConfig>,
+  file: string,
+) {
+  return lineChecksStep.run({
+    cwd: dir,
+    tmpDir: dir,
+    config,
+    scope: addedFileScope(file),
+    runCommand: async () => commandResult(),
+    env: {},
+  });
+}
+
+function testImportHits(
+  filePath: string,
+  sourceText: string,
+  addedLines: ReadonlySet<number>,
+  options: Parameters<typeof scanAddedSource>[3] = {},
+) {
+  return ruleHits('test-import', filePath, sourceText, addedLines, options);
 }
 
 describe('test-import', () => {
@@ -541,48 +588,195 @@ describe('test-import', () => {
   });
 
   it('honors allowTestImports globs and lineChecksStep default-on / enabled:false behavior', async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-allow-test-imports-'));
-    try {
-      fs.mkdirSync(path.join(dir, 'src/test-utils'), { recursive: true });
-      fs.writeFileSync(path.join(dir, 'src/a.ts'), "import { describe } from 'vitest';\n");
-      fs.writeFileSync(path.join(dir, 'src/test-utils/render.ts'), "import { render } from '@testing-library/react';\n");
-      const noopRun = async () => commandResult();
+    await withTempFiles(
+      'gate-allow-test-imports-',
+      {
+        'src/a.ts': "import { describe } from 'vitest';\n",
+        'src/test-utils/render.ts': "import { render } from '@testing-library/react';\n",
+      },
+      async (dir) => {
+        const omittedConfig = parseTestConfig({ steps: { tests: { command: 't' } } });
+        expect(lineChecksStep.isEnabled(omittedConfig)).toBe(true);
+        const omittedResult = await runLineChecksStep(dir, omittedConfig, 'src/a.ts');
+        expect(stepFindings(omittedResult).map((finding) => finding.rule)).toEqual(['test-import']);
 
-      const omittedConfig = parseTestConfig({ steps: { tests: { command: 't' } } });
-      expect(lineChecksStep.isEnabled(omittedConfig)).toBe(true);
-      const omittedResult = await lineChecksStep.run({
-        cwd: dir,
-        tmpDir: dir,
-        config: omittedConfig,
-        scope: addedFileScope('src/a.ts'),
-        runCommand: noopRun,
-        env: {},
-      });
-      expect(omittedResult.kind).toBe('fail');
-      if (omittedResult.kind === 'fail') {
-        expect(omittedResult.findings.map((finding) => finding.rule)).toEqual(['test-import']);
-      }
+        const exemptConfig = parseTestConfig({
+          steps: { 'line-checks': { allowTestImports: ['src/test-utils/**'] } },
+        });
+        expect((await runLineChecksStep(dir, exemptConfig, 'src/test-utils/render.ts')).kind).toBe('pass');
 
-      const exemptConfig = parseTestConfig({
-        steps: { 'line-checks': { allowTestImports: ['src/test-utils/**'] } },
-      });
-      const exemptResult = await lineChecksStep.run({
-        cwd: dir,
-        tmpDir: dir,
-        config: exemptConfig,
-        scope: addedFileScope('src/test-utils/render.ts'),
-        runCommand: noopRun,
-        env: {},
-      });
-      expect(exemptResult.kind).toBe('pass');
+        const disabled = parseTestConfig({
+          steps: { tests: { command: 't' }, 'line-checks': { enabled: false } },
+        });
+        expect(lineChecksStep.isEnabled(disabled)).toBe(false);
+      },
+    );
+  });
+});
 
-      const disabledConfig = parseTestConfig({
-        steps: { tests: { command: 't' }, 'line-checks': { enabled: false } },
-      });
-      expect(lineChecksStep.isEnabled(disabledConfig)).toBe(false);
-    } finally {
-      fs.rmSync(dir, { recursive: true, force: true });
+function testEnvHits(
+  filePath: string,
+  sourceText: string,
+  addedLines: ReadonlySet<number>,
+  options: Parameters<typeof scanAddedSource>[3] = {},
+) {
+  return ruleHits('test-env', filePath, sourceText, addedLines, { testImports: false, ...options });
+}
+
+describe('test-env', () => {
+  it('flags direct test-runner env expressions in dot and bracket forms', () => {
+    const cases: ReadonlyArray<{ label: string; source: string; expected: string }> = [
+      { label: 'process.env.VITEST', source: 'if (process.env.VITEST) {}\n', expected: 'process.env.VITEST' },
+      { label: "process.env['VITEST']", source: "if (process.env['VITEST']) {}\n", expected: "process.env['VITEST']" },
+      { label: "process['env']['VITEST']", source: "if (process['env']['VITEST']) {}\n", expected: "process['env']['VITEST']" },
+      { label: 'process.env.JEST_WORKER_ID', source: 'const inJest = Boolean(process.env.JEST_WORKER_ID);\n', expected: 'process.env.JEST_WORKER_ID' },
+      { label: "process.env['JEST_WORKER_ID']", source: "const inJest = Boolean(process.env['JEST_WORKER_ID']);\n", expected: "process.env['JEST_WORKER_ID']" },
+      { label: 'import.meta.env.VITEST', source: 'if (import.meta.env.VITEST) {}\n', expected: 'import.meta.env.VITEST' },
+      { label: "import.meta.env['VITEST']", source: "if (import.meta.env['VITEST']) {}\n", expected: "import.meta.env['VITEST']" },
+      { label: "import.meta['env']['VITEST']", source: "if (import.meta['env']['VITEST']) {}\n", expected: "import.meta['env']['VITEST']" },
+      { label: 'import.meta.vitest', source: 'if (import.meta.vitest) {}\n', expected: 'import.meta.vitest' },
+      { label: "import.meta['vitest']", source: "if (import.meta['vitest']) {}\n", expected: "import.meta['vitest']" },
+    ];
+    for (const item of cases) {
+      const hits = testEnvHits('src/a.ts', item.source, new Set([1]));
+      expect(hits, item.label).toEqual([
+        { step: 'line-checks', file: 'src/a.ts', line: 1, rule: 'test-env', message: item.expected },
+      ]);
     }
+  });
+
+  it('flags NODE_ENV and import.meta.env.MODE comparisons to test with any equality operator or operand order', () => {
+    const cases: ReadonlyArray<string> = [
+      "process.env.NODE_ENV === 'test'",
+      "process.env.NODE_ENV !== 'test'",
+      "process.env.NODE_ENV == 'test'",
+      "process.env.NODE_ENV != 'test'",
+      "'test' === process.env.NODE_ENV",
+      "'test' !== process.env.NODE_ENV",
+      "'test' == process.env.NODE_ENV",
+      "'test' != process.env.NODE_ENV",
+      "process.env['NODE_ENV'] === 'test'",
+      "process['env']['NODE_ENV'] !== 'test'",
+      '"test" === process.env["NODE_ENV"]',
+      'process.env.NODE_ENV === `test`',
+      "import.meta.env.MODE === 'test'",
+      "import.meta.env.MODE !== 'test'",
+      "import.meta.env.MODE == 'test'",
+      "import.meta.env.MODE != 'test'",
+      "'test' === import.meta.env.MODE",
+      "import.meta.env['MODE'] === 'test'",
+      "import.meta['env']['MODE'] !== 'test'",
+    ];
+    for (const expr of cases) {
+      const hits = testEnvHits('src/a.ts', `const x = ${expr};\n`, new Set([1]));
+      expect(hits, expr).toEqual([
+        { step: 'line-checks', file: 'src/a.ts', line: 1, rule: 'test-env', message: expr },
+      ]);
+    }
+  });
+
+  it('does not flag production/development comparisons, unrelated env names, comments, or strings', () => {
+    const lines = [
+      "const a = process.env.NODE_ENV === 'production';",
+      "const b = process.env.NODE_ENV !== 'production';",
+      "const c = process.env.NODE_ENV === 'development';",
+      "const d = 'development' === process.env['NODE_ENV'];",
+      "const e = import.meta.env.MODE === 'production';",
+      "const f = import.meta.env.MODE === 'development';",
+      'const g = process.env.NODE_ENV;',
+      'const h = import.meta.env.MODE;',
+      "const i = process.env.APP_ENV === 'test';",
+      'const j = process.env.API_URL;',
+      'const k = import.meta.env.VITE_API_URL;',
+      'const l = obj.process.env.VITEST;',
+      "const m = 'process.env.VITEST';",
+      "// if (process.env.NODE_ENV === 'test')",
+    ];
+    const added = new Set([...lines.keys()].map((index) => index + 1));
+    expect(testEnvHits('src/a.ts', `${lines.join('\n')}\n`, added)).toEqual([]);
+  });
+
+  it('does not flag unchanged pre-existing lines or multi-line edits where the expression start line is old', () => {
+    const singleLine = 'if (process.env.VITEST) {\n  doWork();\n}\n';
+    expect(testEnvHits('src/a.ts', singleLine, new Set([2]))).toEqual([]);
+
+    const multiLineComparison = "const isTest =\n  process.env.NODE_ENV ===\n  'test';\n";
+    expect(testEnvHits('src/a.ts', multiLineComparison, new Set([3]))).toEqual([]);
+    expect(testEnvHits('src/a.ts', multiLineComparison, new Set([2]))).toEqual([
+      {
+        step: 'line-checks',
+        file: 'src/a.ts',
+        line: 2,
+        rule: 'test-env',
+        message: "process.env.NODE_ENV ===\n  'test'",
+      },
+    ]);
+  });
+
+  it('skips test files matching default or custom testGlobs', () => {
+    const source = "if (process.env.VITEST || process.env.NODE_ENV === 'test') {}\n";
+    expect(testEnvHits('src/a.test.ts', source, new Set([1]))).toEqual([]);
+    expect(testEnvHits('src/__tests__/x.ts', source, new Set([1]))).toEqual([]);
+    expect(testEnvHits('vitest.config.ts', source, new Set([1]))).toEqual([]);
+    expect(
+      testEnvHits('src/fixtures/seed.ts', source, new Set([1]), {
+        testGlobs: ['src/fixtures/**'],
+      }),
+    ).toEqual([]);
+    expect(
+      testEnvHits('src/a.test.ts', source, new Set([1]), {
+        testGlobs: ['src/fixtures/**'],
+      }),
+    ).toHaveLength(2);
+    expect(testEnvHits('src/a.test.ts', source, new Set([1]), { testGlobs: [] })).toHaveLength(2);
+  });
+
+  it('flags custom testEnvNames on process.env and import.meta.env in dot and bracket forms', () => {
+    const lines = [
+      'const a = process.env.MY_TEST_FLAG;',
+      "const b = process.env['MY_TEST_FLAG'];",
+      'const c = import.meta.env.MY_TEST_FLAG;',
+      "const d = import.meta.env['MY_TEST_FLAG'];",
+      'const e = process.env.OTHER_FLAG;',
+    ];
+    const added = new Set([1, 2, 3, 4, 5]);
+    const hits = testEnvHits('src/a.ts', `${lines.join('\n')}\n`, added, {
+      testEnvNames: ['MY_TEST_FLAG'],
+    });
+    expect(hits).toEqual([
+      { step: 'line-checks', file: 'src/a.ts', line: 1, rule: 'test-env', message: 'process.env.MY_TEST_FLAG' },
+      { step: 'line-checks', file: 'src/a.ts', line: 2, rule: 'test-env', message: "process.env['MY_TEST_FLAG']" },
+      { step: 'line-checks', file: 'src/a.ts', line: 3, rule: 'test-env', message: 'import.meta.env.MY_TEST_FLAG' },
+      { step: 'line-checks', file: 'src/a.ts', line: 4, rule: 'test-env', message: "import.meta.env['MY_TEST_FLAG']" },
+    ]);
+  });
+
+  it('runs by default in lineChecksStep, honors testEnvNames, and stops when enabled is false', async () => {
+    await withTempFiles(
+      'gate-test-env-',
+      {
+        'src/a.ts': 'export const flag = Boolean(process.env.VITEST);\n',
+        'src/custom.ts': 'export const flag = Boolean(process.env.E2E_MODE);\n',
+      },
+      async (dir) => {
+        const omitted = parseTestConfig({ steps: { tests: { command: 't' } } });
+        expect(lineChecksStep.isEnabled(omitted)).toBe(true);
+        expect(stepFindings(await runLineChecksStep(dir, omitted, 'src/a.ts'))).toEqual([
+          { step: 'line-checks', file: 'src/a.ts', line: 1, rule: 'test-env', message: 'process.env.VITEST' },
+        ]);
+
+        const withCustom = parseTestConfig({ steps: { 'line-checks': { testEnvNames: ['E2E_MODE'] } } });
+        expect(stepFindings(await runLineChecksStep(dir, withCustom, 'src/custom.ts'))).toEqual([
+          { step: 'line-checks', file: 'src/custom.ts', line: 1, rule: 'test-env', message: 'process.env.E2E_MODE' },
+        ]);
+
+        expect(
+          lineChecksStep.isEnabled(
+            parseTestConfig({ steps: { tests: { command: 't' }, 'line-checks': { enabled: false } } }),
+          ),
+        ).toBe(false);
+      },
+    );
   });
 });
 

@@ -409,6 +409,7 @@ describe('parseGateConfig', () => {
         allowSilencing: [],
         allowTestImports: [],
         commentPatterns: [],
+        testEnvNames: [],
       });
     }
   });
@@ -425,6 +426,7 @@ describe('parseGateConfig', () => {
         allowSilencing: ['src/generated/**'],
         allowTestImports: [],
         commentPatterns: [],
+        testEnvNames: [],
       });
     }
   });
@@ -514,6 +516,38 @@ describe('parseGateConfig', () => {
     expect(emptyEntry.ok).toBe(false);
     if (!emptyEntry.ok) {
       expect(emptyEntry.error).toContain('steps.line-checks.commentPatterns[0]');
+    }
+  });
+
+  it('accepts steps.line-checks.testEnvNames and rejects invalid values', () => {
+    const absent = parseGateConfig({ steps: { 'line-checks': {} } }, 'x');
+    expect(absent.ok).toBe(true);
+    if (absent.ok) {
+      expect(absent.value.steps['line-checks']?.testEnvNames).toEqual([]);
+    }
+    const valid = parseGateConfig(
+      { steps: { 'line-checks': { testEnvNames: ['PLAYWRIGHT_TEST', 'CYPRESS'] } } },
+      'x',
+    );
+    expect(valid.ok).toBe(true);
+    if (valid.ok) {
+      expect(valid.value.steps['line-checks']?.testEnvNames).toEqual(['PLAYWRIGHT_TEST', 'CYPRESS']);
+    }
+    const notArray = parseGateConfig(
+      { steps: { 'line-checks': { testEnvNames: 'PLAYWRIGHT_TEST' } } },
+      'x',
+    );
+    expect(notArray.ok).toBe(false);
+    if (!notArray.ok) {
+      expect(notArray.error).toMatch(/steps\.line-checks\.testEnvNames/);
+    }
+    const empty = parseGateConfig(
+      { steps: { 'line-checks': { testEnvNames: [''] } } },
+      'x',
+    );
+    expect(empty.ok).toBe(false);
+    if (!empty.ok) {
+      expect(empty.error).toMatch(/steps\.line-checks\.testEnvNames\[0\]/);
     }
   });
 

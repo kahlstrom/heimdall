@@ -47,6 +47,7 @@ const LINE_CHECKS_FIELD_KEYS = new Set([
   'allowSilencing',
   'allowTestImports',
   'commentPatterns',
+  'testEnvNames',
 ]);
 
 export const DEFAULT_CONFIG_NAME = 'heimdall.config.json';
@@ -420,6 +421,7 @@ function defaultLineChecksConfig(enabled: boolean): LineChecksConfig {
     allowSilencing: [],
     allowTestImports: [],
     commentPatterns: [],
+    testEnvNames: [],
   };
 }
 
@@ -458,11 +460,16 @@ function parseLineChecks(value: unknown): Result<LineChecksConfig | undefined> {
   if (!commentPatterns.ok) {
     return commentPatterns;
   }
+  const testEnvNames = parseStringArray(value.testEnvNames, 'steps.line-checks.testEnvNames');
+  if (!testEnvNames.ok) {
+    return testEnvNames;
+  }
   return ok({
     enabled: value.enabled !== false,
     allowSilencing: allowSilencing.value,
     allowTestImports: allowTestImports.value,
     commentPatterns: commentPatterns.value,
+    testEnvNames: testEnvNames.value,
   });
 }
 

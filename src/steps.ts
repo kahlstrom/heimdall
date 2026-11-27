@@ -724,7 +724,7 @@ export const lineChecksStep: GateStep = {
   name: 'line-checks',
   scopeToDiff: true,
   isEnabled(config) {
-    // Omitted means no-silencing and test-import still run; `"enabled": false` turns the step off.
+    // Omitted means no-silencing, test-import, and test-env still run; `"enabled": false` turns the step off.
     return config.steps['line-checks']?.enabled !== false;
   },
   async run(ctx) {
@@ -734,6 +734,7 @@ export const lineChecksStep: GateStep = {
         extras: lineChecks?.enabled === true,
         allowSilencing: lineChecks?.allowSilencing ?? [],
         allowTestImports: lineChecks?.allowTestImports ?? [],
+        testEnvNames: lineChecks?.testEnvNames ?? [],
         testGlobs: ctx.config.testGlobs,
         secrets: ctx.config.steps.secrets?.enabled === true,
         commentPatterns: lineChecks?.commentPatterns ?? [],
