@@ -99,9 +99,9 @@ function commentSuppressions(commentText: string): {
   };
 }
 
-function suppressionMessage(kind: string, line: string): string {
+function suppressionMessage(kind: string, line: string, redact: boolean): string {
   // Secret-scanner comments may sit on a line that still holds a secret.
-  return SECRET_SUPPRESSION_KINDS.has(kind) ? kind : line.trim();
+  return redact ? kind : line.trim();
 }
 
 function scriptKindForPath(filePath: string): ts.ScriptKind | undefined {
@@ -523,9 +523,10 @@ export function scanAddedSource(
       continue;
     }
     const { secretKind, otherKind } = commentSuppressions(commentText);
+    const redactLine = secretKind !== undefined;
     const suppression = (secrets ? secretKind : undefined) ?? otherKind;
     if (suppression !== undefined) {
-      const message = suppressionMessage(suppression, line);
+      const message = suppressionMessage(suppression, line, redactLine);
       if (extras) {
         push(hits, filePath, lineNumber, 'suppression', message);
       }
@@ -540,7 +541,7 @@ export function scanAddedSource(
         filePath,
         lineNumber,
         'comment-pattern',
-        commentPatternMessage(matchedPattern, commentText, secretKind !== undefined),
+        commentPatternMessage(matchedPattern, commentText, redactLine),
       );
     }
   }

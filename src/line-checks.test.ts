@@ -304,26 +304,46 @@ describe('secret-scanner suppressions', () => {
     },
   ];
 
+  function expectRedactedSuppressionHits(
+    hits: ReturnType<typeof scanAddedSource>,
+    kind: string,
+    secretToken: string,
+    source: string,
+  ): void {
+    expect(hits).toEqual([
+      { step: 'line-checks', file: 'src/a.ts', line: 1, rule: 'suppression', message: kind },
+      { step: 'line-checks', file: 'src/a.ts', line: 1, rule: 'no-silencing', message: kind },
+    ]);
+    expect(hits.every((hit) => !hit.message.includes(secretToken))).toBe(true);
+    expect(hits.every((hit) => hit.message !== source.trim())).toBe(true);
+  }
+
   for (const form of mixedOrders) {
     it(`names only the secret kind for ${form.name} when secrets is on`, () => {
       const hits = suppressionHits(form.source, new Set([1]), true);
-      expect(hits).toEqual([
-        { step: 'line-checks', file: 'src/a.ts', line: 1, rule: 'suppression', message: 'gitleaks:allow' },
-        { step: 'line-checks', file: 'src/a.ts', line: 1, rule: 'no-silencing', message: 'gitleaks:allow' },
-      ]);
-      expect(hits.every((hit) => !hit.message.includes('leaked-value'))).toBe(true);
-      expect(hits.every((hit) => hit.message !== form.source.trim())).toBe(true);
+      expectRedactedSuppressionHits(hits, 'gitleaks:allow', 'leaked-value', form.source);
     });
 
-    it(`still flags eslint-disable for ${form.name} when secrets is off`, () => {
+    it(`still flags eslint-disable for ${form.name} when secrets is off, naming only the kind`, () => {
       const hits = suppressionHits(form.source, new Set([1]), false);
-      expect(hits).toEqual([
-        { step: 'line-checks', file: 'src/a.ts', line: 1, rule: 'suppression', message: form.source.trim() },
-        { step: 'line-checks', file: 'src/a.ts', line: 1, rule: 'no-silencing', message: form.source.trim() },
-      ]);
-      expect(hits.every((hit) => hit.message.includes('eslint-disable'))).toBe(true);
+      expectRedactedSuppressionHits(hits, 'eslint-disable', 'leaked-value', form.source);
     });
   }
+
+  it('omits a fake token from every finding when gitleaks:allow or secretlint-disable shares a line with eslint-disable and secrets is off', () => {
+    const fakeToken = 'fake-token-do-not-print-12345';
+    const sources = [
+      `const token = '${fakeToken}'; // gitleaks:allow eslint-disable-line no-unused-vars\n`,
+      `const token = '${fakeToken}'; // secretlint-disable-line eslint-disable-line no-unused-vars\n`,
+    ];
+    for (const source of sources) {
+      const hits = scanAddedSource('src/a.ts', source, new Set([1]), {
+        secrets: false,
+        testGlobs: DEFAULT_TEST_GLOBS,
+      });
+      expectRedactedSuppressionHits(hits, 'eslint-disable', fakeToken, source);
+    }
+  });
 });
 
 describe('commentPatterns', () => {
