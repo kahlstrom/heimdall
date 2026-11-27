@@ -43,6 +43,8 @@ const PERSONAL_PATH_RE = /\/Users\/|\/home\/|~\/|[A-Za-z]:\\/;
 const GUIDE_PERSONAL_PATH_RE = /\/Users\/\w+|\/home\/\w+/;
 const CENTRAL_KNIP_COMMAND =
   '"$HEIMDALL_CONFIG_DIR/../node_modules/.bin/knip" --config "$HEIMDALL_CONFIG_DIR/knip.json" --reporter json --no-progress';
+const CENTRAL_KNIP_PRODUCTION_COMMAND =
+  '"$HEIMDALL_CONFIG_DIR/../node_modules/.bin/knip" --config "$HEIMDALL_CONFIG_DIR/knip.json" --production --reporter json --no-progress';
 const CENTRAL_JSCPD_BIN = '$HEIMDALL_CONFIG_DIR/../node_modules/.bin/jscpd';
 const DUAL_LAYOUT_KNIP_BINS = [
   '$HEIMDALL_HOME/node_modules/.bin/knip',
@@ -145,6 +147,18 @@ describe('configs/example/heimdall.config.json', () => {
     });
     expect(fs.existsSync(path.join(exampleDir, '.dependency-cruiser.cjs'))).toBe(true);
   });
+
+  it('includes sample commentPatterns, default testGlobs, and a disabled knip-production entry', () => {
+    const config = parsedExampleConfig();
+    const knipProd = config.steps['knip-production'];
+    expect(knipProd?.enabled).toBe(false);
+    expect(knipProd?.command).toBe(CENTRAL_KNIP_PRODUCTION_COMMAND);
+    expect(knipProd?.command).not.toContain('npx');
+    expect(knipProd?.command).not.toMatch(PERSONAL_PATH_RE);
+    const patternSources = (config.steps['line-checks']?.commentPatterns ?? []).map((re) => re.source);
+    expect(patternSources).toEqual(['\\bPhase \\d+\\b', '\\b[A-Z][A-Z0-9]+-\\d+\\b']);
+    expect(config.testGlobs).toEqual(DEFAULT_TEST_GLOBS);
+  });
 });
 
 describe('SETUP-WITH-AN-AGENT.md', () => {
@@ -232,6 +246,20 @@ describe('SETUP-WITH-AN-AGENT.md', () => {
     expect(guide).not.toMatch(
       /Do not finish until the no-change Heimdall run in Step 4 was \*\*GREEN\*\*/,
     );
+    expect(guide).not.toMatch(GUIDE_PERSONAL_PATH_RE);
+  });
+
+  it('documents knip-production ! markers, both command forms, no-change check, and report fields', () => {
+    const guide = fs.readFileSync(SETUP_GUIDE_PATH, 'utf8');
+    expect(guide).toContain('steps.knip-production');
+    expect(guide).toContain(CENTRAL_KNIP_PRODUCTION_COMMAND);
+    expect(guide).toContain(
+      'npx --no-install knip --config "$HEIMDALL_CONFIG_DIR/knip.json" --production --reporter json --no-progress',
+    );
+    expect(guide).toMatch(/`!` production markers/);
+    expect(guide).toMatch(/knip-production ! markers/);
+    expect(guide).toMatch(/knip-production baseline:/);
+    expect(guide).toMatch(/no-change GREEN check/);
     expect(guide).not.toMatch(GUIDE_PERSONAL_PATH_RE);
   });
 

@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `steps.line-checks.commentPatterns` (default `[]`): array of regex strings
+  compiled with no flags (an invalid regex is a GATE ERROR). Flags added
+  comment lines (`//`, `/*`, or leading `*`) in JS/TS files (`.ts`, `.tsx`,
+  `.js`, `.jsx`, `.mjs`, `.cjs`, `.mts`, `.cts`), including test files, as
+  `file:line [comment-pattern] matches /<pattern>/: <trimmed comment>` for the
+  first matching pattern. String literals are ignored.
+- Top-level `testGlobs` (default `["**/*.test.*", "**/*.spec.*",
+  "**/__tests__/**", "**/test/**", "**/tests/**", "**/e2e/**", "**/*.config.*"]`;
+  an explicit array replaces the defaults, and `[]` matches nothing) and the
+  built-in `test-import` check in `line-checks` (on by default unless
+  `line-checks` is disabled). Flags added static `import` / `export ... from`,
+  `import = require(...)`, `import('...').Type`, dynamic `import('...')`, and
+  `require('...')` specifiers in non-test JS/TS files that target known test
+  frameworks (`vitest`, `jest`, `mocha`, `jasmine`, `ava`, `node:test`, `sinon`,
+  `chai`, `msw/node`, `@playwright/test`, `cypress`, `@jest/*`,
+  `@testing-library/*`, including subpaths) or relative paths resolving to
+  files matching `testGlobs`. Opt shared helpers out with
+  `steps.line-checks.allowTestImports`.
+- Built-in `test-env` check in `line-checks` (on by default unless
+  `line-checks` is disabled) and `steps.line-checks.testEnvNames` (default
+  `[]`). Flags added test-runner environment checks in non-test JS/TS files
+  (dot or string-literal bracket access): `process.env.VITEST`,
+  `process.env.JEST_WORKER_ID`, `import.meta.env.VITEST`, `import.meta.vitest`,
+  equality/inequality checks (`===`, `!==`, `==`, `!=`) of
+  `process.env.NODE_ENV` or `import.meta.env.MODE` against `'test'`, and any
+  extra names in `testEnvNames` on `process.env` or `import.meta.env`.
+  Comparisons to `'production'` or `'development'` and bare `NODE_ENV` / `MODE`
+  reads are not flagged.
+- Optional `steps.knip-production` command step (off unless configured). Runs a
+  second knip command (for example `knip --production --reporter json
+  --no-progress` with `!`-marked production patterns in `knip.json`), parses
+  stdout with the knip JSON parser, and fails only on findings new versus the
+  merge-base (materialized in `$HEIMDALL_TMP/knip-production-base`, skipped
+  when the branch has no findings). `SETUP-WITH-AN-AGENT.md` adds a step for
+  `!` production markers, central-binary and in-repo commands, the no-change
+  GREEN check, and report fields.
+
 ## [0.2.0] - 2026-11-26
 
 ### Added

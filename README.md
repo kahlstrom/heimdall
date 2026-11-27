@@ -80,7 +80,7 @@ project repos do not need those dependencies:
 | TypeScript (`tsc`) | `steps.typecheck` |
 | Vitest (or Jest) | `steps.tests` |
 | ESLint | `steps.eslint` |
-| knip | `steps.knip` (unused files, exports, deps) |
+| knip | `steps.knip` (unused files, exports, deps), `steps.knip-production` (optional; production-only unused code) |
 | jscpd | `steps.jscpd` (copy-paste) |
 | secretlint | `steps.secrets` (optional; off unless configured) |
 | dependency-cruiser | `steps.architecture` (optional; off unless configured) |
@@ -194,6 +194,7 @@ defaults below are exactly what `src/config.ts` accepts.
 | `setup` | array of non-empty strings | `[]` | `["docker compose up -d db"]` |
 | `teardown` | array of non-empty strings | `[]` | `["docker compose down"]` |
 | `protectedPaths` | array of non-empty glob strings | `[]` (check off) | `["src/generated/**", "vendor/**"]` |
+| `testGlobs` | array of non-empty glob strings | `["**/*.test.*", "**/*.spec.*", "**/__tests__/**", "**/test/**", "**/tests/**", "**/e2e/**", "**/*.config.*"]` | `["**/*.test.*", "src/fixtures/**"]` |
 
 `requireParentBase`: when `true` and neither `--base` nor `baseRef` is set, a
 resolved base of `main` or `origin/main`, or no upstream at all, is a **GATE
@@ -217,6 +218,11 @@ attempted. Setup/teardown use the same default timeout as steps (`300000` ms).
 A missing setup/teardown command (shell exit 127) names the top-level key and
 the failing command and its index, not `steps.setup.command`.
 
+`testGlobs`: repo-relative globs that identify test and config files for the
+built-in `test-import` and `test-env` checks. When omitted, Heimdall uses the
+default list above. An explicit array replaces the defaults; `[]` matches no
+files.
+
 At least one step must be enabled.
 
 Every run prints the resolved **base** and where it came from (`--base`,
@@ -227,9 +233,9 @@ ran on.
 
 ### `steps.<name>` command steps
 
-Allowed names: `typecheck`, `tests`, `eslint`, `knip`, `jscpd`, `secrets`,
-`architecture`. A missing step is off. A present step is on unless
-`"enabled": false`.
+Allowed names: `typecheck`, `tests`, `eslint`, `knip`, `knip-production`,
+`jscpd`, `secrets`, `architecture`. A missing step is off. A present step is on
+unless `"enabled": false`.
 
 | Key | Type | Default | Example |
 | --- | --- | --- | --- |
@@ -250,6 +256,7 @@ its index.
 | `typecheck` | Full typecheck (`tsc --noEmit` or equivalent). |
 | `eslint` | Prefer `-f json` so findings can be scoped. Extra key: `maxWarnings`. A finding counts if it is on an added line, or if it is new versus the merge-base anywhere. Matching uses rule, optional `messageId`, and the message with digit runs normalized (identifier names stay distinct). A renamed file matches the merge-base under the old path. The baseline run happens only when the branch has findings off added lines; a baseline failure is a GATE ERROR. |
 | `knip` | Prefer `--reporter json`. For a home config with no knip, use the central command in [`configs/example/heimdall.config.json`](./configs/example/heimdall.config.json). For an in-repo config, see [SETUP-WITH-AN-AGENT.md](./SETUP-WITH-AN-AGENT.md#step-3-write-a-config-for-each-repo) Step 3. |
+| `knip-production` | Optional (off unless configured). Prefer `--production --reporter json --no-progress` with `!` production markers in `knip.json` to catch code reachable only from tests. Uses the same knip JSON parser and merge-base comparison as `knip`. See [`configs/example/heimdall.config.json`](./configs/example/heimdall.config.json) and [SETUP-WITH-AN-AGENT.md](./SETUP-WITH-AN-AGENT.md#step-3-write-a-config-for-each-repo) Step 3. |
 | `jscpd` | Must print JSON on stdout. `$HEIMDALL_TMP` is a per-run temp dir. For a home config with no jscpd, use the central command in that same example. For an in-repo config, see that same SETUP Step 3. |
 | `secrets` | Prefer secretlint 14.x `--format json`. No default command. Findings are scoped to added lines; the report prints rule id and `file:line` only, never the matched secret. |
 | `architecture` | Prefer dependency-cruiser 18.x `--output-type json`. No default command, rules file, or tool path. Fails only on new error-severity violations versus the merge-base; warnings are ignored. |
@@ -272,8 +279,8 @@ Built-in. No command.
 
 | Form | Meaning |
 | --- | --- |
-| omitted | **no-silencing** still runs (on by default) |
-| `true` | extras on (as-cast, non-null, …) plus no-silencing |
+| omitted | **no-silencing**, **test-import**, and **test-env** still run (on by default) |
+| `true` | extras on (as-cast, non-null, …) plus the default checks (`no-silencing`, `test-import`, `test-env`) |
 | `false` / `{ "enabled": false }` | whole step off |
 | `{ "enabled": true, "allowSilencing": ["src/generated/**"] }` | extras on; matching globs skip no-silencing |
 
@@ -281,6 +288,9 @@ Built-in. No command.
 | --- | --- | --- | --- |
 | `enabled` | boolean | `true` if the object is present without `enabled: false` | `true` |
 | `allowSilencing` | array of non-empty glob strings | `[]` | `["src/generated/**"]` |
+| `allowTestImports` | array of non-empty glob strings | `[]` | `["src/test-utils/**"]` |
+| `commentPatterns` | array of non-empty regex strings (compiled with no flags; invalid regex is a GATE ERROR) | `[]` (check off) | `["\\bPhase \\d+\\b", "\\b[A-Z][A-Z0-9]+-\\d+\\b"]` |
+| `testEnvNames` | array of non-empty strings | `[]` | `["PLAYWRIGHT_TEST", "E2E_MODE"]` |
 
 ### New problems only
 
@@ -291,15 +301,15 @@ merge-base** anywhere (an import left unused after its last use is deleted is
 caught; a pre-existing error in untouched code is not). That baseline run
 happens only when the branch has eslint findings that are not on added lines,
 so ESLint may run twice and a repo with a slow ESLint step pays that time. A
-baseline failure is a GATE ERROR, not a pass. Knip and architecture run on the
-**whole project** and fail only on findings that are **not present at the
-merge-base** (a helper left unused after its last caller is deleted is caught;
-old dead code in untouched areas is not). If the merge-base knip or
-architecture result cannot be computed, that is a GATE ERROR, not a pass.
-New-versus-base matching for knip, architecture, and eslint uses **file, rule,
-and message** (not line) and counts duplicates: a second identical finding is
-new if the merge-base only has one. A git rename (`diff -M`) matches the
-finding in the new path against the merge-base under the old path. Architecture
+baseline failure is a GATE ERROR, not a pass. Knip (`knip` and
+`knip-production`) and architecture run on the **whole project** and fail only
+on findings that are **not present at the merge-base** (a helper left unused
+after its last caller is deleted is caught; old dead code in untouched areas is
+not). If the merge-base knip or architecture result cannot be computed, that is
+a GATE ERROR, not a pass. New-versus-base matching for knip, architecture, and
+eslint uses **file, rule, and message** (not line) and counts duplicates: a
+second identical finding is new if the merge-base only has one. A git rename
+(`diff -M`) matches the finding in the new path against the merge-base under the old path. Architecture
 messages map each ` -> ` path segment exactly onto the old path. ESLint messages
 drop standalone digit runs so `no-shadow` line/column text still matches after
 line drift; identifier names such as `foo2` stay distinct. For `complexity`,
@@ -339,7 +349,8 @@ On by default for added lines in `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, and
   literal keys, or type parameters.
 
 Opt a generated path out with `steps.line-checks.allowSilencing`.
-`"enabled": false` turns off no-silencing and the extras below.
+`"enabled": false` turns off `line-checks` (no-silencing, the rules below, and
+the extras).
 
 When `"enabled": true` (or `true`), also flag rule-gaming extras:
 
@@ -348,6 +359,49 @@ When `"enabled": true` (or `true`), also flag rule-gaming extras:
 - the same suppression comments (rule `suppression`)
 - any `void …;` statement (including `void foo()`)
 - underscore-prefixed parameters (`_unused`)
+
+### comment-pattern
+
+Off unless `steps.line-checks.commentPatterns` is non-empty. Scans added
+comment lines (`//`, `/*`, or leading `*`) in JS/TS files (`.ts`, `.tsx`,
+`.js`, `.jsx`, `.mjs`, `.cjs`, `.mts`, `.cts`), including test files, ignoring
+comment-like text inside string literals. Each hit prints
+`file:line [comment-pattern] matches /<pattern>/: <trimmed comment>` for the
+first matching pattern on that line. Patterns are compiled with no regex flags;
+an invalid regex in config is a GATE ERROR.
+
+### test-import
+
+On by default for added lines in non-test JS/TS files (`.ts`, `.tsx`, `.js`,
+`.jsx`, `.mjs`, `.cjs`, `.mts`, `.cts` not matching `testGlobs`). Each hit
+prints `file:line [test-import] ...`. It flags added static `import` /
+`export ... from`, `import = require(...)`, `import('...').Type`, dynamic
+`import('...')`, and `require('...')` specifiers that target:
+
+- Known test-framework packages (including subpaths): `vitest`, `jest`,
+  `mocha`, `jasmine`, `ava`, `node:test`, `sinon`, `chai`, `msw/node`,
+  `@playwright/test`, `cypress`, and scopes `@jest/*` and `@testing-library/*`.
+- Relative paths whose resolved repo-relative file matches `testGlobs`.
+
+Opt shared test-helper folders out with `steps.line-checks.allowTestImports`,
+or adjust which paths count as tests with top-level `testGlobs`.
+
+### test-env
+
+On by default for added lines in non-test JS/TS files (same extensions and
+`testGlobs` exclusion as `test-import`). Each hit prints
+`file:line [test-env] <expression>`. It flags added test-runner environment
+checks (dot or string-literal bracket access):
+
+- `process.env.VITEST`, `process.env.JEST_WORKER_ID`,
+  `import.meta.env.VITEST`, and `import.meta.vitest`.
+- Equality/inequality checks (`===`, `!==`, `==`, `!=`, either operand order)
+  of `process.env.NODE_ENV` or `import.meta.env.MODE` against `'test'`.
+- Any extra names listed in `steps.line-checks.testEnvNames` on `process.env`
+  or `import.meta.env`.
+
+Comparisons to `'production'` or `'development'` and bare reads of `NODE_ENV`
+or `MODE` are not flagged.
 
 ### Protected paths
 
@@ -456,7 +510,7 @@ alone (except tests, which are red when they fail and the failure can be
 parsed). A runner crash with no parseable output is a **GATE ERROR**.
 
 - **eslint:** JSON formatter (`-f json`)
-- **knip:** JSON reporter `{ "files": [...unused files], "issues": [...] }` including
+- **knip / knip-production:** JSON reporter `{ "files": [...unused files], "issues": [...] }` including
   unused deps/devDeps, unlisted, unresolved, binaries, exports, types, enum/class
   members, and duplicates.
 - **secrets:** secretlint `--format json` (14.x), an ESLint-like
@@ -489,7 +543,8 @@ short grace so child processes cannot linger. SIGINT or SIGTERM on Heimdall
 itself kills the running step tree, runs teardown, and exits non-zero.
 
 Knip's JSON reporter is parsed from stdout. The step materializes the merge-base
-in `$HEIMDALL_TMP/knip-base` (no stash) and runs the same knip command there.
+in `$HEIMDALL_TMP/knip-base` (or `$HEIMDALL_TMP/knip-production-base` for
+`knip-production`; no stash) and runs the same command there.
 Architecture does the same in `$HEIMDALL_TMP/architecture-base` and skips that
 baseline run when the branch has no error-severity violations. ESLint uses
 `$HEIMDALL_TMP/eslint-base` the same way, and skips that run when every finding

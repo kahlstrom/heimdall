@@ -46,9 +46,9 @@ Follow these for the whole setup, even if a step seems to need otherwise:
   the merge-base of a base ref and fails only on **new** problems. Secrets and
   jscpd findings are limited to changed files and lines. An ESLint finding
   counts if it is on an added line, or if it is new versus the merge-base
-  anywhere. Knip and architecture fail only on findings that are not present
-  at the merge-base. Tests and typecheck run in full. Built-in `line-checks`
-  look only at added lines.
+  anywhere. Knip (`knip` and `knip-production`) and architecture fail only on
+  findings that are not present at the merge-base. Tests and typecheck run in
+  full. Built-in `line-checks` look only at added lines.
 - Each repo needs a `heimdall.config.json` that lists the commands to run.
 
 ## Step 1: Check prerequisites and install
@@ -236,10 +236,11 @@ the **real** commands for each Heimdall step:
 | `tests` | the repo has Vitest or Jest | `npx --no-install vitest run --reporter=json` or `npx --no-install jest --json` |
 | `eslint` | the repo has ESLint configured | `npx --no-install eslint . -f json` |
 | `knip` | JavaScript or TypeScript | config-home, no repo install: the central command above. In-repo config or repo has knip: `npx --no-install knip --config "$HEIMDALL_CONFIG_DIR/knip.json" --reporter json --no-progress`. Generate the sibling `knip.json` with the loop below. |
+| `knip-production` | optional; JS/TS repos that want to catch code used only by tests | config-home, no repo install: the central `--production` command below. In-repo config or repo has knip: the `npx --no-install` `--production` command below. Add `!` production markers to `knip.json` as below. |
 | `jscpd` | JavaScript or TypeScript | config-home, no repo install: the central command above. In-repo config or repo has jscpd: `npx --no-install jscpd src --reporters json --silent --output "$HEIMDALL_TMP" && cat "$HEIMDALL_TMP/jscpd-report.json"` |
 | `secrets` | the repo has secretlint 14.x | `npx --no-install -p secretlint@14 secretlint --secretlintrc "$HEIMDALL_CONFIG_DIR/.secretlintrc.json" --format json "**/*"` |
 | `architecture` | the repo has dependency-cruiser 18.x | `npx --no-install -p dependency-cruiser@18 depcruise --config "$HEIMDALL_CONFIG_DIR/.dependency-cruiser.cjs" src --output-type json` |
-| `line-checks` | always available, built in | omit it (no-silencing stays on) or set `true` for the stricter extras. When `secrets` is enabled, new `secretlint-disable` and `gitleaks:allow` comments are flagged too (the finding names the kind only, never the rest of the line). |
+| `line-checks` | always available, built in | omit it (`no-silencing`, `test-import`, and `test-env` stay on) or set `true` for the stricter extras. Optional keys: `allowSilencing`, `allowTestImports`, `commentPatterns`, `testEnvNames` (plus top-level `testGlobs`). When `secrets` is enabled, new `secretlint-disable` and `gitleaks:allow` comments are flagged too (the finding names the kind only, never the rest of the line). |
 
 Rules for this step:
 
@@ -352,6 +353,73 @@ rounds):
   tell it is an entry, generated or vendored, a bad plugin, or dead code,
   act on it without asking.
 
+### Optional: enable `steps.knip-production`
+
+Regular `knip` treats code imported by tests as used. Adding
+`steps.knip-production` runs knip in `--production` mode so production files,
+exports, and dependencies that are only referenced by tests (or unreachable
+from production entries) turn RED when newly introduced. Skip this section if
+the user does not want a separate production pass or if knip was omitted above.
+
+1. **Add knip's `!` production markers to `$HEIMDALL_CONFIG_DIR/knip.json`.**
+   In knip, a trailing `!` marks an `entry` or `project` pattern as part of the
+   production graph (either at the root or per package under `workspaces`):
+   - Add `!` to production `entry` patterns (for example `"src/index.ts!"` or
+     `"src/cli.ts!"`). Leave dev-only or test-only entries without `!` so
+     regular `knip` still covers them.
+   - Add `!` to production `project` patterns and exclude test files from the
+     production project set (for example `"src/**/*.ts!"` alongside
+     `"!src/**/*.test.ts!"` or the repo's test globs).
+
+2. **Test `--production` locally and triage false positives.** Run knip from the
+   project repo root against the sibling `knip.json` (again, Heimdall is not
+   running here, so use the folder holding `heimdall.config.json`):
+
+   ```bash
+   "<folder holding heimdall.config.json>/../node_modules/.bin/knip" --config "<folder holding heimdall.config.json>/knip.json" --production
+   ```
+
+   When the Heimdall config is in-repo (or the repo has its own knip):
+
+   ```bash
+   npx --no-install knip --config "<folder holding heimdall.config.json>/knip.json" --production
+   ```
+
+   Use the same triage rules as the knip loop above: add `!` to real
+   production entry files that were missed, never ignore real source folders,
+   and leave real dead or test-only production code reported. Record each `!`
+   production marker added (with a one-line reason) and the count of existing
+   `knip-production` baseline findings for Step 6.
+
+3. **Add `steps.knip-production` to `heimdall.config.json`.** Pick the form
+   that matches where the config lives:
+
+   - Home config (central binary, when the repo has no knip):
+
+     ```text
+     "$HEIMDALL_CONFIG_DIR/../node_modules/.bin/knip" --config "$HEIMDALL_CONFIG_DIR/knip.json" --production --reporter json --no-progress
+     ```
+
+   - In-repo config (or repo already has knip):
+
+     ```text
+     npx --no-install knip --config "$HEIMDALL_CONFIG_DIR/knip.json" --production --reporter json --no-progress
+     ```
+
+4. **Prove it with a no-change GREEN check.** Commit the updated
+   `heimdall.config.json` and `knip.json` in the configs repo (with the user's
+   OK), then run `heimdall` from the project root on a branch with **no
+   changes** versus the base (same rule as Step 4). Existing `knip-production`
+   findings are the baseline and do not fail Heimdall; **GREEN** proves the
+   step works. Handle **RED** or **GATE ERROR** with the same Step 4 rules
+   (paste, explain, and ask; never work around a GATE ERROR).
+
+5. **Report the production setup in Step 6:** state whether `knip-production`
+   is enabled, list the `!` production `entry` and `project` markers added to
+   `knip.json` (with a one-line reason each), report the `knip-production`
+   baseline count and any leftover findings to review, and paste the no-change
+   `HEIMDALL SUMMARY` block.
+
 A minimal config for a TypeScript + Vitest + ESLint repo:
 
 ```json
@@ -385,7 +453,8 @@ Then:
 - **RED:** paste the findings and summary exactly, then explain them. Secrets,
   jscpd, and line-checks only count added-line hits. ESLint counts a finding
   on an added line, or one that is new versus the merge-base anywhere. Knip
-  and architecture only count findings not present at the merge-base. On a
+  (`knip` and `knip-production`) and architecture only count findings not
+  present at the merge-base. On a
   branch with no changes those should be quiet. Secrets findings print as
   `file:line [rule]` with no message text. Tests and typecheck run in full, so
   failures that already exist on the base branch will show here. Tell the user
@@ -536,6 +605,13 @@ knip.json additions (each with a one-line reason):
   (or: none — starter matched the repo)
 knip baseline: 12 existing dead-code findings (these do not fail Heimdall; only new findings count)
 knip leftover: none (or: the real dead code still reported, listed; never hidden)
+knip-production: enabled (or: not enabled)
+knip-production ! markers (each with a one-line reason):
+  entry: src/cli.ts! — production CLI entry
+  project: src/**/*.ts!, !src/**/*.test.ts! — production source without unit tests
+  (or: none — knip-production not enabled)
+knip-production baseline: 3 existing production-only findings (these do not fail Heimdall; only new findings count)
+knip-production leftover: none (or: test-only or dead production code still reported, listed; never hidden)
 
 <HEIMDALL SUMMARY block pasted exactly>
 ```

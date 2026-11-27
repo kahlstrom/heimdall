@@ -23,6 +23,11 @@
       "command": "\"$HEIMDALL_CONFIG_DIR/../node_modules/.bin/knip\" --config \"$HEIMDALL_CONFIG_DIR/knip.json\" --reporter json --no-progress",
       "timeoutMs": 300000
     },
+    "knip-production": {
+      "enabled": false,
+      "command": "\"$HEIMDALL_CONFIG_DIR/../node_modules/.bin/knip\" --config \"$HEIMDALL_CONFIG_DIR/knip.json\" --production --reporter json --no-progress",
+      "timeoutMs": 300000
+    },
     "jscpd": {
       "enabled": true,
       "command": "\"$HEIMDALL_CONFIG_DIR/../node_modules/.bin/jscpd\" src --reporters json --silent --output \"$HEIMDALL_TMP\" && cat \"$HEIMDALL_TMP/jscpd-report.json\"",
@@ -40,11 +45,26 @@
     },
     "line-checks": {
       "enabled": true,
-      "allowSilencing": []
+      "allowSilencing": [],
+      "allowTestImports": [],
+      "commentPatterns": [
+        "\\bPhase \\d+\\b",
+        "\\b[A-Z][A-Z0-9]+-\\d+\\b"
+      ],
+      "testEnvNames": []
     }
   },
   "flakes": [],
   "setup": [],
   "teardown": [],
-  "protectedPaths": []
+  "protectedPaths": [],
+  "testGlobs": [
+    "**/*.test.*",
+    "**/*.spec.*",
+    "**/__tests__/**",
+    "**/test/**",
+    "**/tests/**",
+    "**/e2e/**",
+    "**/*.config.*"
+  ]
 }
