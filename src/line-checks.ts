@@ -25,12 +25,15 @@ export type ScanAddedSourceOptions = {
   readonly noSilencing?: boolean;
   /** When true, also flag new secretlint-disable / gitleaks:allow comments. */
   readonly secrets?: boolean;
+  /** Compiled patterns checked against added comment lines in JS/TS files. */
+  readonly commentPatterns?: readonly RegExp[];
 };
 
 export type LineCheckOptions = {
   readonly extras?: boolean;
   readonly allowSilencing?: readonly string[];
   readonly secrets?: boolean;
+  readonly commentPatterns?: readonly RegExp[];
 };
 
 function suppressionKind(commentText: string, secrets: boolean): string | undefined {
@@ -214,6 +217,10 @@ function isSilencingUnderscoreBinding(node: ts.Node): string | undefined {
   return undefined;
 }
 
+function commentPatternMessage(pattern: RegExp, commentText: string): string {
+  return `matches /${pattern.source}/: ${commentText.trim()}`;
+}
+
 /**
  * Scan one file's added lines for rule-gaming hits.
  */
@@ -226,22 +233,33 @@ export function scanAddedSource(
   const extras = options.extras !== false;
   const noSilencing = options.noSilencing !== false;
   const secrets = options.secrets === true;
+  const commentPatterns = options.commentPatterns ?? [];
   const hits: Finding[] = [];
   const sourceLines = sourceText.split('\n');
   for (const lineNumber of addedLines) {
     const line = sourceLines[lineNumber - 1] ?? '';
     const commentText = commentTextOfLine(line);
-    const suppression = commentText ? suppressionKind(commentText, secrets) : undefined;
-    if (suppression === undefined) {
+    if (commentText === '') {
       continue;
     }
-    const message = suppressionMessage(suppression, line);
-    if (extras) {
-      push(hits, filePath, lineNumber, 'suppression', message);
+    const suppression = suppressionKind(commentText, secrets);
+    if (suppression !== undefined) {
+      const message = suppressionMessage(suppression, line);
+      if (extras) {
+        push(hits, filePath, lineNumber, 'suppression', message);
+      }
+      if (noSilencing) {
+        push(hits, filePath, lineNumber, 'no-silencing', message);
+      }
     }
-    if (noSilencing) {
-      push(hits, filePath, lineNumber, 'no-silencing', message);
+    const matchedPattern = commentPatterns.find((pattern) => commentText.search(pattern) !== -1);
+    if (matchedPattern !== undefined) {
+      push(hits, filePath, lineNumber, 'comment-pattern', commentPatternMessage(matchedPattern, commentText));
     }
+  }
+
+  if (!extras && !noSilencing) {
+    return hits;
   }
 
   const kind = scriptKindForPath(filePath);
@@ -295,15 +313,18 @@ export function runLineChecks(
   const extras = options.extras !== false;
   const allowSilencing = options.allowSilencing ?? [];
   const secrets = options.secrets === true;
+  const commentPatterns = options.commentPatterns ?? [];
   const hits: Finding[] = [];
   for (const [filePath, addedLines] of scope.addedLines) {
     if (addedLines.size === 0) {
       continue;
     }
-    const extrasOn = extras && SOURCE_FILE_EXT_RE.test(filePath);
+    const isSource = SOURCE_FILE_EXT_RE.test(filePath);
+    const extrasOn = extras && isSource;
     const noSilencingOn =
       NO_SILENCING_FILE_EXT_RE.test(filePath) && !matchesAnyGlob(filePath, allowSilencing);
-    if (!extrasOn && !noSilencingOn) {
+    const commentPatternsOn = commentPatterns.length > 0 && isSource;
+    if (!extrasOn && !noSilencingOn && !commentPatternsOn) {
       continue;
     }
     const abs = path.join(repoRoot, filePath);
@@ -317,6 +338,7 @@ export function runLineChecks(
       extras: extrasOn,
       noSilencing: noSilencingOn,
       secrets,
+      commentPatterns,
     }));
   }
   return ok(hits);

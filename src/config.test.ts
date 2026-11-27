@@ -401,6 +401,7 @@ describe('parseGateConfig', () => {
     if (parsed.ok) {
       expect(parsed.value.steps['line-checks']?.enabled).toBe(true);
       expect(parsed.value.steps['line-checks']?.allowSilencing).toEqual([]);
+      expect(parsed.value.steps['line-checks']?.commentPatterns).toEqual([]);
     }
   });
 
@@ -412,6 +413,7 @@ describe('parseGateConfig', () => {
     expect(parsed.ok).toBe(true);
     if (parsed.ok) {
       expect(parsed.value.steps['line-checks']?.allowSilencing).toEqual(['src/generated/**']);
+      expect(parsed.value.steps['line-checks']?.commentPatterns).toEqual([]);
     }
   });
 
@@ -423,6 +425,56 @@ describe('parseGateConfig', () => {
     expect(parsed.ok).toBe(false);
     if (!parsed.ok) {
       expect(parsed.error).toMatch(/steps\.line-checks\.allowSilencing/);
+    }
+  });
+
+  it('compiles steps.line-checks.commentPatterns with no flags and defaults to empty', () => {
+    const empty = parseGateConfig({ steps: { 'line-checks': { commentPatterns: [] } } }, 'x');
+    expect(empty.ok).toBe(true);
+    if (empty.ok) {
+      expect(empty.value.steps['line-checks']?.commentPatterns).toEqual([]);
+    }
+    const parsed = parseGateConfig(
+      { steps: { 'line-checks': { commentPatterns: ['FIXME', 'TEMP_\\d+'] } } },
+      'x',
+    );
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      const patterns = parsed.value.steps['line-checks']?.commentPatterns ?? [];
+      expect(patterns).toHaveLength(2);
+      expect(patterns[0]).toBeInstanceOf(RegExp);
+      expect(patterns[0]?.source).toBe('FIXME');
+      expect(patterns[0]?.flags).toBe('');
+      expect(patterns[1]).toBeInstanceOf(RegExp);
+      expect(patterns[1]?.source).toBe('TEMP_\\d+');
+      expect(patterns[1]?.flags).toBe('');
+    }
+  });
+
+  it('rejects invalid or non-array steps.line-checks.commentPatterns as a GATE ERROR', () => {
+    const invalid = parseGateConfig(
+      { steps: { 'line-checks': { commentPatterns: ['FIXME', '[unclosed'] } } },
+      'x',
+    );
+    expect(invalid.ok).toBe(false);
+    if (!invalid.ok) {
+      expect(invalid.error).toContain('steps.line-checks.commentPatterns[1]');
+    }
+    const notArray = parseGateConfig(
+      { steps: { 'line-checks': { commentPatterns: 'FIXME' } } },
+      'x',
+    );
+    expect(notArray.ok).toBe(false);
+    if (!notArray.ok) {
+      expect(notArray.error).toContain('steps.line-checks.commentPatterns');
+    }
+    const emptyEntry = parseGateConfig(
+      { steps: { 'line-checks': { commentPatterns: [''] } } },
+      'x',
+    );
+    expect(emptyEntry.ok).toBe(false);
+    if (!emptyEntry.ok) {
+      expect(emptyEntry.error).toContain('steps.line-checks.commentPatterns[0]');
     }
   });
 

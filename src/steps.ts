@@ -734,6 +734,7 @@ export const lineChecksStep: GateStep = {
         extras: lineChecks?.enabled === true,
         allowSilencing: lineChecks?.allowSilencing ?? [],
         secrets: ctx.config.steps.secrets?.enabled === true,
+        commentPatterns: lineChecks?.commentPatterns ?? [],
       });
       if (!findings.ok) {
         return { kind: 'error', name: 'line-checks', reason: findings.error };

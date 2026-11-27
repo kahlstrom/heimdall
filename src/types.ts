@@ -72,6 +72,7 @@ export type EslintStepConfig = CommandStepConfig & {
 export type LineChecksConfig = {
   readonly enabled: boolean;
   readonly allowSilencing: readonly string[];
+  readonly commentPatterns: readonly RegExp[];
 };
 
 export type GateConfig = {

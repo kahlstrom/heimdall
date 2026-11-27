@@ -294,6 +294,105 @@ describe('secret-scanner suppressions', () => {
   }
 });
 
+describe('commentPatterns', () => {
+  it('flags a new matching comment naming the matched pattern and trimmed comment', () => {
+    const pattern = new RegExp('FIXME:\\s*\\w+');
+    const hits = scanAddedSource(
+      'src/a.ts',
+      'const x = 1; // FIXME: clean up   \n',
+      new Set([1]),
+      { extras: false, commentPatterns: [pattern] },
+    );
+    expect(hits).toEqual([
+      {
+        step: 'line-checks',
+        file: 'src/a.ts',
+        line: 1,
+        rule: 'comment-pattern',
+        message: 'matches /FIXME:\\s*\\w+/: // FIXME: clean up',
+      },
+    ]);
+  });
+
+  it('does not flag a matching comment on an unchanged pre-existing line', () => {
+    const source = '// FIXME: old note\nconst ok = 1;\n';
+    const hits = scanAddedSource('src/a.ts', source, new Set([2]), {
+      extras: false,
+      commentPatterns: [new RegExp('FIXME')],
+    });
+    expect(hits).toEqual([]);
+  });
+
+  it('does not flag a string literal containing matching text', () => {
+    const source = "const msg = '// FIXME: inside string';\nconst plain = 'FIXME';\n";
+    const hits = scanAddedSource('src/a.ts', source, new Set([1, 2]), {
+      extras: false,
+      commentPatterns: [new RegExp('FIXME')],
+    });
+    expect(hits).toEqual([]);
+  });
+
+  it('does nothing when commentPatterns is empty', () => {
+    const hits = scanAddedSource('src/a.ts', '// FIXME: ignored when empty\n', new Set([1]), {
+      extras: false,
+      commentPatterns: [],
+    });
+    expect(hits).toEqual([]);
+  });
+
+  it('runs on test files and .mts files even when extras and silencing checks are off', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-comment-patterns-'));
+    try {
+      fs.mkdirSync(path.join(dir, 'src'));
+      fs.writeFileSync(path.join(dir, 'src/foo.test.ts'), '// WORKAROUND: temporary\n');
+      fs.writeFileSync(path.join(dir, 'src/helper.mts'), '// WORKAROUND: temporary\n');
+      fs.writeFileSync(path.join(dir, 'README.md'), '// WORKAROUND: doc example\n');
+      const scope: DiffScope = {
+        baseRef: 'main',
+        mergeBaseSha: 'a',
+        changedFiles: new Set(['src/foo.test.ts', 'src/helper.mts', 'README.md']),
+        addedLines: new Map([
+          ['src/foo.test.ts', new Set([1])],
+          ['src/helper.mts', new Set([1])],
+          ['README.md', new Set([1])],
+        ]),
+        renamedFrom: new Map(),
+      };
+      const result = runLineChecks(dir, scope, {
+        extras: false,
+        allowSilencing: ['**/*.test.ts'],
+        commentPatterns: [new RegExp('WORKAROUND')],
+      });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.value).toEqual([
+          {
+            step: 'line-checks',
+            file: 'src/foo.test.ts',
+            line: 1,
+            rule: 'comment-pattern',
+            message: 'matches /WORKAROUND/: // WORKAROUND: temporary',
+          },
+          {
+            step: 'line-checks',
+            file: 'src/helper.mts',
+            line: 1,
+            rule: 'comment-pattern',
+            message: 'matches /WORKAROUND/: // WORKAROUND: temporary',
+          },
+        ]);
+      }
+      const empty = runLineChecks(dir, addedFileScope('src/missing.mts'), {
+        extras: false,
+        commentPatterns: [],
+      });
+      expect(empty).toEqual({ ok: true, value: [] });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
 describe('docs are not scanned as source', () => {
   it('does not flag a markdown bullet that mentions eslint-disable', () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-lines-md-'));

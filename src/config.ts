@@ -39,7 +39,7 @@ const TOP_LEVEL_KEYS = new Set([
 const STEP_KEYS = new Set<StepName>(STEP_NAMES);
 const COMMAND_STEP_FIELD_KEYS = new Set(['enabled', 'command', 'timeoutMs']);
 const ESLINT_STEP_FIELD_KEYS = new Set(['enabled', 'command', 'timeoutMs', 'maxWarnings']);
-const LINE_CHECKS_FIELD_KEYS = new Set(['enabled', 'allowSilencing']);
+const LINE_CHECKS_FIELD_KEYS = new Set(['enabled', 'allowSilencing', 'commentPatterns']);
 
 export const DEFAULT_CONFIG_NAME = 'heimdall.config.json';
 export const LEGACY_CONFIG_NAME = 'gate.config.json';
@@ -378,15 +378,43 @@ function parseEslintStep(value: unknown): Result<EslintStepConfig | undefined> {
   return ok({ ...base.value, maxWarnings: maxWarnings.value });
 }
 
+function parseRegexArray(value: unknown, pathPrefix: string): Result<readonly RegExp[]> {
+  const patterns = parseStringArray(value, pathPrefix);
+  if (!patterns.ok) {
+    return patterns;
+  }
+  const compiled: RegExp[] = [];
+  for (let index = 0; index < patterns.value.length; index += 1) {
+    const source = patterns.value[index];
+    if (source === undefined) {
+      continue;
+    }
+    try {
+      compiled.push(new RegExp(source));
+    } catch (cause) {
+      return err(`${pathPrefix}[${index}] is not a valid regex: ${errorMessage(cause)}`);
+    }
+  }
+  return ok(compiled);
+}
+
+function defaultLineChecksConfig(enabled: boolean): LineChecksConfig {
+  return {
+    enabled,
+    allowSilencing: [],
+    commentPatterns: [],
+  };
+}
+
 function parseLineChecks(value: unknown): Result<LineChecksConfig | undefined> {
   if (value === undefined) {
     return ok(undefined);
   }
   if (value === true) {
-    return ok({ enabled: true, allowSilencing: [] });
+    return ok(defaultLineChecksConfig(true));
   }
   if (value === false) {
-    return ok({ enabled: false, allowSilencing: [] });
+    return ok(defaultLineChecksConfig(false));
   }
   if (!isRecord(value)) {
     return err('steps.line-checks must be an object or boolean');
@@ -402,7 +430,15 @@ function parseLineChecks(value: unknown): Result<LineChecksConfig | undefined> {
   if (!allowSilencing.ok) {
     return allowSilencing;
   }
-  return ok({ enabled: value.enabled !== false, allowSilencing: allowSilencing.value });
+  const commentPatterns = parseRegexArray(value.commentPatterns, 'steps.line-checks.commentPatterns');
+  if (!commentPatterns.ok) {
+    return commentPatterns;
+  }
+  return ok({
+    enabled: value.enabled !== false,
+    allowSilencing: allowSilencing.value,
+    commentPatterns: commentPatterns.value,
+  });
 }
 
 /**
