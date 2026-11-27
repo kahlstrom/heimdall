@@ -129,7 +129,7 @@ export function parseKnipOutput(output: string, step: KnipStepName = 'knip'): Re
   return parseKnipJson(json.value, step);
 }
 
-export function parseKnipJson(value: unknown, step: KnipStepName = 'knip'): Result<Finding[]> {
+export function parseKnipJson(value: unknown, step: KnipStepName): Result<Finding[]> {
   if (!isRecord(value)) {
     return err('knip JSON must be an object');
   }

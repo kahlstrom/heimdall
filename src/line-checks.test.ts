@@ -2,10 +2,17 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { commentTextOfLine, runLineChecks, scanAddedSource } from './line-checks.js';
+import {
+  commentTextOfLine,
+  runLineChecks,
+  scanAddedSource,
+  type ScanAddedSourceOptions,
+} from './line-checks.js';
 import { lineChecksStep } from './steps.js';
-import type { DiffScope } from './types.js';
+import { DEFAULT_TEST_GLOBS, type DiffScope } from './types.js';
 import { commandResult, parseTestConfig } from '../test/helpers/gate-test.js';
+
+const DEFAULT_SCAN_OPTIONS = { testGlobs: DEFAULT_TEST_GLOBS } as const;
 
 function addedFileScope(file: string): DiffScope {
   return {
@@ -19,22 +26,22 @@ function addedFileScope(file: string): DiffScope {
 
 describe('scanAddedSource', () => {
   it('flags a type assertion on an added line', () => {
-    const hits = scanAddedSource('src/a.ts', 'const value = input as number;\n', new Set([1]));
+    const hits = scanAddedSource('src/a.ts', 'const value = input as number;\n', new Set([1]), DEFAULT_SCAN_OPTIONS);
     expect(hits.some((hit) => hit.rule === 'as-cast')).toBe(true);
   });
 
   it('does not flag a const assertion', () => {
-    const hits = scanAddedSource('src/a.ts', 'const value = { ok: true } as const;\n', new Set([1]));
+    const hits = scanAddedSource('src/a.ts', 'const value = { ok: true } as const;\n', new Set([1]), DEFAULT_SCAN_OPTIONS);
     expect(hits.filter((hit) => hit.rule === 'as-cast')).toEqual([]);
   });
 
   it('does not flag an import rename', () => {
-    const hits = scanAddedSource('src/a.ts', "import { foo as bar } from 'mod';\n", new Set([1]));
+    const hits = scanAddedSource('src/a.ts', "import { foo as bar } from 'mod';\n", new Set([1]), DEFAULT_SCAN_OPTIONS);
     expect(hits.filter((hit) => hit.rule === 'as-cast')).toEqual([]);
   });
 
   it('flags a postfix non-null assertion', () => {
-    const hits = scanAddedSource('src/a.ts', 'const value = input!.name;\n', new Set([1]));
+    const hits = scanAddedSource('src/a.ts', 'const value = input!.name;\n', new Set([1]), DEFAULT_SCAN_OPTIONS);
     expect(hits.some((hit) => hit.rule === 'non-null')).toBe(true);
   });
 
@@ -43,12 +50,18 @@ describe('scanAddedSource', () => {
       'src/a.ts',
       'const a = input !== other;\nconst b = input != other;\nconst c = !input;\n',
       new Set([1, 2, 3]),
+      DEFAULT_SCAN_OPTIONS,
     );
     expect(hits.filter((hit) => hit.rule === 'non-null')).toEqual([]);
   });
 
   it('flags a suppression comment on an added line', () => {
-    const hits = scanAddedSource('src/a.ts', '// eslint-disable-next-line no-console\nconsole.log(1);\n', new Set([1]));
+    const hits = scanAddedSource(
+      'src/a.ts',
+      '// eslint-disable-next-line no-console\nconsole.log(1);\n',
+      new Set([1]),
+      DEFAULT_SCAN_OPTIONS,
+    );
     expect(hits.some((hit) => hit.rule === 'suppression')).toBe(true);
   });
 
@@ -57,52 +70,60 @@ describe('scanAddedSource', () => {
       'src/a.ts',
       "const source = '// eslint-disable-next-line no-console';\n",
       new Set([1]),
+      DEFAULT_SCAN_OPTIONS,
     );
     expect(hits.filter((hit) => hit.rule === 'suppression')).toEqual([]);
   });
 
   it('flags a void statement', () => {
-    const hits = scanAddedSource('src/a.ts', 'void unused;\n', new Set([1]));
+    const hits = scanAddedSource('src/a.ts', 'void unused;\n', new Set([1]), DEFAULT_SCAN_OPTIONS);
     expect(hits.some((hit) => hit.rule === 'void-statement')).toBe(true);
   });
 
   it('does not flag void 0 in an expression', () => {
-    const hits = scanAddedSource('src/a.ts', 'const x = void 0;\n', new Set([1]));
+    const hits = scanAddedSource('src/a.ts', 'const x = void 0;\n', new Set([1]), DEFAULT_SCAN_OPTIONS);
     expect(hits.filter((hit) => hit.rule === 'void-statement')).toEqual([]);
   });
 
   it('flags an underscore param', () => {
-    const hits = scanAddedSource('src/a.ts', 'function take(_unused: number) { return 1; }\n', new Set([1]));
+    const hits = scanAddedSource(
+      'src/a.ts',
+      'function take(_unused: number) { return 1; }\n',
+      new Set([1]),
+      DEFAULT_SCAN_OPTIONS,
+    );
     expect(hits.some((hit) => hit.rule === 'underscore-param')).toBe(true);
   });
 
   it('flags ts-ignore in a comment and an angle-bracket assertion', () => {
-    const ignoreHits = scanAddedSource('src/a.ts', '// @ts-ignore\nconst n = 1;\n', new Set([1]));
+    const ignoreHits = scanAddedSource('src/a.ts', '// @ts-ignore\nconst n = 1;\n', new Set([1]), DEFAULT_SCAN_OPTIONS);
     expect(ignoreHits.some((hit) => hit.rule === 'suppression')).toBe(true);
-    const angle = scanAddedSource('src/a.ts', 'const value = <number>input;\n', new Set([1]));
+    const angle = scanAddedSource('src/a.ts', 'const value = <number>input;\n', new Set([1]), DEFAULT_SCAN_OPTIONS);
     expect(angle.some((hit) => hit.rule === 'as-cast')).toBe(true);
   });
 
+  function asCastHits(source: string, addedLines: ReadonlySet<number>) {
+    return scanAddedSource('src/a.ts', source, addedLines, DEFAULT_SCAN_OPTIONS).filter(
+      (hit) => hit.rule === 'as-cast',
+    );
+  }
+
   it('does not flag findings on lines that were not added', () => {
-    const source = 'const value = input as number;\nconst ok = 1;\n';
-    const hits = scanAddedSource('src/a.ts', source, new Set([2]));
-    expect(hits.filter((hit) => hit.rule === 'as-cast')).toEqual([]);
+    expect(asCastHits('const value = input as number;\nconst ok = 1;\n', new Set([2]))).toEqual([]);
   });
 
   it('does not flag a pre-existing multi-line as-cast when only an inner line was added', () => {
-    const source = 'const value = {\n  extra: 1,\n} as Config;\n';
-    const hits = scanAddedSource('src/a.ts', source, new Set([2]));
-    expect(hits.filter((hit) => hit.rule === 'as-cast')).toEqual([]);
+    expect(asCastHits('const value = {\n  extra: 1,\n} as Config;\n', new Set([2]))).toEqual([]);
   });
 
   it('flags a multi-line as-cast only on the added type line', () => {
-    const source = 'const value = {\n  extra: 1,\n} as Config;\n';
-    const hits = scanAddedSource('src/a.ts', source, new Set([3]));
-    expect(hits.some((hit) => hit.rule === 'as-cast' && hit.line === 3)).toBe(true);
+    expect(asCastHits('const value = {\n  extra: 1,\n} as Config;\n', new Set([3])).some((hit) => hit.line === 3)).toBe(
+      true,
+    );
   });
 
   it('flags an angle-bracket assertion in a .cts file', () => {
-    const hits = scanAddedSource('src/a.cts', 'const value = <number>input;\n', new Set([1]));
+    const hits = scanAddedSource('src/a.cts', 'const value = <number>input;\n', new Set([1]), DEFAULT_SCAN_OPTIONS);
     expect(hits.some((hit) => hit.rule === 'as-cast')).toBe(true);
   });
 });
@@ -114,7 +135,7 @@ describe('runLineChecks', () => {
       fs.mkdirSync(path.join(dir, 'src'));
       fs.writeFileSync(path.join(dir, 'src/a.ts'), 'export const n = (x: unknown) => x as number;\n');
       const scope = addedFileScope('src/a.ts');
-      const hits = runLineChecks(dir, scope);
+      const hits = runLineChecks(dir, scope, DEFAULT_SCAN_OPTIONS);
       expect(hits.ok).toBe(true);
       if (hits.ok) {
         expect(hits.value.some((hit) => hit.rule === 'as-cast')).toBe(true);
@@ -124,7 +145,7 @@ describe('runLineChecks', () => {
         changedFiles: new Set(['src/missing.ts']),
         addedLines: new Map([['src/missing.ts', new Set([1])]]),
       };
-      const unread = runLineChecks(dir, missing);
+      const unread = runLineChecks(dir, missing, DEFAULT_SCAN_OPTIONS);
       expect(unread.ok).toBe(false);
       if (!unread.ok) {
         expect(unread.error).toMatch(/cannot read src\/missing\.ts/);
@@ -147,9 +168,15 @@ describe('commentTextOfLine', () => {
 
 describe('no-silencing', () => {
   it('flags a bare void-identifier statement and not a void call', () => {
-    const ident = scanAddedSource('src/a.ts', 'void unused;\n', new Set([1]), { extras: false });
+    const ident = scanAddedSource('src/a.ts', 'void unused;\n', new Set([1]), {
+      extras: false,
+      testGlobs: DEFAULT_TEST_GLOBS,
+    });
     expect(ident.some((hit) => hit.rule === 'no-silencing')).toBe(true);
-    const call = scanAddedSource('src/a.ts', 'void load();\n', new Set([1]), { extras: false });
+    const call = scanAddedSource('src/a.ts', 'void load();\n', new Set([1]), {
+      extras: false,
+      testGlobs: DEFAULT_TEST_GLOBS,
+    });
     expect(call.filter((hit) => hit.rule === 'no-silencing')).toEqual([]);
   });
 
@@ -158,29 +185,29 @@ describe('no-silencing', () => {
       'src/a.ts',
       '// eslint-disable-next-line no-console\nconsole.log(1);\n',
       new Set([1]),
-      { extras: false },
+      { extras: false, testGlobs: DEFAULT_TEST_GLOBS },
     );
     expect(disable.some((hit) => hit.rule === 'no-silencing' && hit.line === 1)).toBe(true);
     const ignore = scanAddedSource('src/a.ts', '// @ts-expect-error leftover\nconst n = 1;\n', new Set([1]), {
       extras: false,
+      testGlobs: DEFAULT_TEST_GLOBS,
     });
     expect(ignore.some((hit) => hit.rule === 'no-silencing')).toBe(true);
   });
 
   it('flags underscore parameters and const declarations, not object shorthand', () => {
-    const param = scanAddedSource('src/a.ts', 'function take(_unused: number) { return 1; }\n', new Set([1]), {
-      extras: false,
-    });
+    const noExtras = { extras: false, testGlobs: DEFAULT_TEST_GLOBS } as const;
+    const param = scanAddedSource('src/a.ts', 'function take(_unused: number) { return 1; }\n', new Set([1]), noExtras);
     expect(param.some((hit) => hit.rule === 'no-silencing' && hit.message === '_unused')).toBe(true);
-    const decl = scanAddedSource('src/a.ts', 'const _ignored = 1;\n', new Set([1]), { extras: false });
+    const decl = scanAddedSource('src/a.ts', 'const _ignored = 1;\n', new Set([1]), noExtras);
     expect(decl.some((hit) => hit.rule === 'no-silencing' && hit.message === '_ignored')).toBe(true);
-    const shorthand = scanAddedSource('src/a.ts', 'const { _id } = row;\n', new Set([1]), { extras: false });
+    const shorthand = scanAddedSource('src/a.ts', 'const { _id } = row;\n', new Set([1]), noExtras);
     expect(shorthand.filter((hit) => hit.rule === 'no-silencing')).toEqual([]);
-    const rename = scanAddedSource('src/a.ts', 'const { used: _unused } = row;\n', new Set([1]), { extras: false });
+    const rename = scanAddedSource('src/a.ts', 'const { used: _unused } = row;\n', new Set([1]), noExtras);
     expect(rename.some((hit) => hit.rule === 'no-silencing' && hit.message === '_unused')).toBe(true);
-    const method = scanAddedSource('src/a.ts', 'class C { _priv() { return 1; } }\n', new Set([1]), { extras: false });
+    const method = scanAddedSource('src/a.ts', 'class C { _priv() { return 1; } }\n', new Set([1]), noExtras);
     expect(method.filter((hit) => hit.rule === 'no-silencing')).toEqual([]);
-    const lodash = scanAddedSource('src/a.ts', "import _ from 'lodash';\n", new Set([1]), { extras: false });
+    const lodash = scanAddedSource('src/a.ts', "import _ from 'lodash';\n", new Set([1]), noExtras);
     expect(lodash.filter((hit) => hit.rule === 'no-silencing')).toEqual([]);
   });
 
@@ -191,7 +218,7 @@ describe('no-silencing', () => {
       fs.writeFileSync(path.join(dir, 'src/a.mts'), 'void unused;\n');
       fs.writeFileSync(path.join(dir, 'src/generated/a.ts'), 'void unused;\n');
       const mtsScope = addedFileScope('src/a.mts');
-      const mtsHits = runLineChecks(dir, mtsScope, { extras: false });
+      const mtsHits = runLineChecks(dir, mtsScope, { extras: false, testGlobs: DEFAULT_TEST_GLOBS });
       expect(mtsHits.ok).toBe(true);
       if (mtsHits.ok) {
         expect(mtsHits.value).toEqual([]);
@@ -200,6 +227,7 @@ describe('no-silencing', () => {
       const skipped = runLineChecks(dir, genScope, {
         extras: false,
         allowSilencing: ['src/generated/**'],
+        testGlobs: DEFAULT_TEST_GLOBS,
       });
       expect(skipped.ok).toBe(true);
       if (skipped.ok) {
@@ -231,13 +259,16 @@ describe('secret-scanner suppressions', () => {
     },
   ];
 
-  function suppressionHits(hits: ReturnType<typeof scanAddedSource>) {
-    return hits.filter((hit) => hit.rule === 'suppression' || hit.rule === 'no-silencing');
+  function suppressionHits(source: string, addedLines: ReadonlySet<number>, secrets: boolean) {
+    return scanAddedSource('src/a.ts', source, addedLines, {
+      secrets,
+      testGlobs: DEFAULT_TEST_GLOBS,
+    }).filter((hit) => hit.rule === 'suppression' || hit.rule === 'no-silencing');
   }
 
   for (const form of forms) {
     it(`flags added ${form.name} when secrets is on, naming only the kind`, () => {
-      const hits = suppressionHits(scanAddedSource('src/a.ts', form.source, new Set([1]), { secrets: true }));
+      const hits = suppressionHits(form.source, new Set([1]), true);
       expect(hits).toEqual([
         { step: 'line-checks', file: 'src/a.ts', line: 1, rule: 'suppression', message: form.kind },
         { step: 'line-checks', file: 'src/a.ts', line: 1, rule: 'no-silencing', message: form.kind },
@@ -245,20 +276,19 @@ describe('secret-scanner suppressions', () => {
     });
 
     it(`does not flag added ${form.name} when secrets is off`, () => {
-      const hits = suppressionHits(scanAddedSource('src/a.ts', form.source, new Set([1])));
-      expect(hits).toEqual([]);
+      expect(suppressionHits(form.source, new Set([1]), false)).toEqual([]);
     });
   }
 
   it('does not flag a secretlint-disable comment on an unchanged line', () => {
     const source = '// secretlint-disable\nconst x = 1;\n';
-    const hits = suppressionHits(scanAddedSource('src/a.ts', source, new Set([2]), { secrets: true }));
-    expect(hits).toEqual([]);
+    expect(suppressionHits(source, new Set([2]), true)).toEqual([]);
   });
 
   it('still flags eslint-disable when secrets is on', () => {
     const hits = scanAddedSource('src/a.ts', '// eslint-disable-next-line no-console\nconsole.log(1);\n', new Set([1]), {
       secrets: true,
+      testGlobs: DEFAULT_TEST_GLOBS,
     });
     expect(hits.some((hit) => hit.rule === 'suppression')).toBe(true);
   });
@@ -276,7 +306,7 @@ describe('secret-scanner suppressions', () => {
 
   for (const form of mixedOrders) {
     it(`names only the secret kind for ${form.name} when secrets is on`, () => {
-      const hits = suppressionHits(scanAddedSource('src/a.ts', form.source, new Set([1]), { secrets: true }));
+      const hits = suppressionHits(form.source, new Set([1]), true);
       expect(hits).toEqual([
         { step: 'line-checks', file: 'src/a.ts', line: 1, rule: 'suppression', message: 'gitleaks:allow' },
         { step: 'line-checks', file: 'src/a.ts', line: 1, rule: 'no-silencing', message: 'gitleaks:allow' },
@@ -286,7 +316,7 @@ describe('secret-scanner suppressions', () => {
     });
 
     it(`still flags eslint-disable for ${form.name} when secrets is off`, () => {
-      const hits = suppressionHits(scanAddedSource('src/a.ts', form.source, new Set([1])));
+      const hits = suppressionHits(form.source, new Set([1]), false);
       expect(hits).toEqual([
         { step: 'line-checks', file: 'src/a.ts', line: 1, rule: 'suppression', message: form.source.trim() },
         { step: 'line-checks', file: 'src/a.ts', line: 1, rule: 'no-silencing', message: form.source.trim() },
@@ -303,7 +333,7 @@ describe('commentPatterns', () => {
       'src/a.ts',
       'const x = 1; // FIXME: clean up   \n',
       new Set([1]),
-      { extras: false, commentPatterns: [pattern] },
+      { extras: false, testGlobs: DEFAULT_TEST_GLOBS, commentPatterns: [pattern] },
     );
     expect(hits).toEqual([
       {
@@ -316,10 +346,40 @@ describe('commentPatterns', () => {
     ]);
   });
 
+  it('redacts comment text on lines carrying a secret suppression', () => {
+    const fakeToken = 'fake-token-do-not-print-98765';
+    const pattern = new RegExp('\\bPhase \\d+\\b');
+    const sources = [
+      `const token = '${fakeToken}'; // gitleaks:allow Phase 1 ${fakeToken}\n`,
+      `const token = '${fakeToken}'; // secretlint-disable-line Phase 1 ${fakeToken}\n`,
+    ];
+    for (const source of sources) {
+      for (const secrets of [true, false]) {
+        const hits = scanAddedSource('src/a.ts', source, new Set([1]), {
+          extras: false,
+          secrets,
+          testGlobs: DEFAULT_TEST_GLOBS,
+          commentPatterns: [pattern],
+        });
+        expect(hits.filter((hit) => hit.rule === 'comment-pattern')).toEqual([
+          {
+            step: 'line-checks',
+            file: 'src/a.ts',
+            line: 1,
+            rule: 'comment-pattern',
+            message: 'matches /\\bPhase \\d+\\b/',
+          },
+        ]);
+        expect(hits.every((hit) => !hit.message.includes(fakeToken))).toBe(true);
+      }
+    }
+  });
+
   it('does not flag a matching comment on an unchanged pre-existing line', () => {
     const source = '// FIXME: old note\nconst ok = 1;\n';
     const hits = scanAddedSource('src/a.ts', source, new Set([2]), {
       extras: false,
+      testGlobs: DEFAULT_TEST_GLOBS,
       commentPatterns: [new RegExp('FIXME')],
     });
     expect(hits).toEqual([]);
@@ -329,6 +389,7 @@ describe('commentPatterns', () => {
     const source = "const msg = '// FIXME: inside string';\nconst plain = 'FIXME';\n";
     const hits = scanAddedSource('src/a.ts', source, new Set([1, 2]), {
       extras: false,
+      testGlobs: DEFAULT_TEST_GLOBS,
       commentPatterns: [new RegExp('FIXME')],
     });
     expect(hits).toEqual([]);
@@ -337,6 +398,7 @@ describe('commentPatterns', () => {
   it('does nothing when commentPatterns is empty', () => {
     const hits = scanAddedSource('src/a.ts', '// FIXME: ignored when empty\n', new Set([1]), {
       extras: false,
+      testGlobs: DEFAULT_TEST_GLOBS,
       commentPatterns: [],
     });
     expect(hits).toEqual([]);
@@ -363,6 +425,7 @@ describe('commentPatterns', () => {
       const result = runLineChecks(dir, scope, {
         extras: false,
         allowSilencing: ['**/*.test.ts'],
+        testGlobs: DEFAULT_TEST_GLOBS,
         commentPatterns: [new RegExp('WORKAROUND')],
       });
       expect(result.ok).toBe(true);
@@ -386,6 +449,7 @@ describe('commentPatterns', () => {
       }
       const empty = runLineChecks(dir, addedFileScope('src/missing.test.mts'), {
         extras: false,
+        testGlobs: DEFAULT_TEST_GLOBS,
         commentPatterns: [],
       });
       expect(empty).toEqual({ ok: true, value: [] });
@@ -400,11 +464,12 @@ function ruleHits(
   filePath: string,
   sourceText: string,
   addedLines: ReadonlySet<number>,
-  options: Parameters<typeof scanAddedSource>[3] = {},
+  options: Partial<ScanAddedSourceOptions> = {},
 ) {
   return scanAddedSource(filePath, sourceText, addedLines, {
     extras: false,
     noSilencing: false,
+    testGlobs: DEFAULT_TEST_GLOBS,
     ...options,
   }).filter((hit) => hit.rule === rule);
 }
@@ -425,6 +490,47 @@ async function withTempFiles(
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+}
+
+async function expectTestGlobSkipping(
+  prefix: string,
+  rule: string,
+  source: string,
+  expectedHitsWhenActive: number,
+): Promise<void> {
+  await withTempFiles(
+    prefix,
+    {
+      'src/a.test.ts': source,
+      'src/__tests__/x.ts': source,
+      'vitest.config.ts': source,
+      'src/fixtures/seed.ts': source,
+    },
+    async (dir) => {
+      const cases: ReadonlyArray<{
+        readonly file: string;
+        readonly testGlobs: readonly string[];
+        readonly count: number;
+      }> = [
+        { file: 'src/a.test.ts', testGlobs: DEFAULT_TEST_GLOBS, count: 0 },
+        { file: 'src/__tests__/x.ts', testGlobs: DEFAULT_TEST_GLOBS, count: 0 },
+        { file: 'vitest.config.ts', testGlobs: DEFAULT_TEST_GLOBS, count: 0 },
+        { file: 'src/fixtures/seed.ts', testGlobs: ['src/fixtures/**'], count: 0 },
+        { file: 'src/a.test.ts', testGlobs: ['src/fixtures/**'], count: expectedHitsWhenActive },
+        { file: 'src/a.test.ts', testGlobs: [], count: expectedHitsWhenActive },
+      ];
+      for (const item of cases) {
+        const result = runLineChecks(dir, addedFileScope(item.file), {
+          extras: false,
+          testGlobs: item.testGlobs,
+        });
+        expect(result.ok, item.file).toBe(true);
+        if (result.ok) {
+          expect(result.value.filter((hit) => hit.rule === rule), item.file).toHaveLength(item.count);
+        }
+      }
+    },
+  );
 }
 
 function stepFindings(result: Awaited<ReturnType<typeof lineChecksStep.run>>) {
@@ -450,7 +556,7 @@ function testImportHits(
   filePath: string,
   sourceText: string,
   addedLines: ReadonlySet<number>,
-  options: Parameters<typeof scanAddedSource>[3] = {},
+  options: Partial<ScanAddedSourceOptions> = {},
 ) {
   return ruleHits('test-import', filePath, sourceText, addedLines, options);
 }
@@ -510,22 +616,13 @@ describe('test-import', () => {
     expect(testImportHits('src/a.ts', multiline, new Set([4]))).toHaveLength(1);
   });
 
-  it('skips test files matching default or custom testGlobs', () => {
-    const source = "import { describe } from 'vitest';\n";
-    expect(testImportHits('src/a.test.ts', source, new Set([1]))).toEqual([]);
-    expect(testImportHits('src/__tests__/x.ts', source, new Set([1]))).toEqual([]);
-    expect(testImportHits('vitest.config.ts', source, new Set([1]))).toEqual([]);
-    expect(
-      testImportHits('src/fixtures/seed.ts', source, new Set([1]), {
-        testGlobs: ['src/fixtures/**'],
-      }),
-    ).toEqual([]);
-    expect(
-      testImportHits('src/a.test.ts', source, new Set([1]), {
-        testGlobs: ['src/fixtures/**'],
-      }),
-    ).toHaveLength(1);
-    expect(testImportHits('src/a.test.ts', source, new Set([1]), { testGlobs: [] })).toHaveLength(1);
+  it('skips test files matching default or custom testGlobs', async () => {
+    await expectTestGlobSkipping(
+      'gate-test-import-globs-',
+      'test-import',
+      "import { describe } from 'vitest';\n",
+      1,
+    );
   });
 
   it('resolves relative paths via extensions, .js->.ts, and /index against testGlobs without false positives', () => {
@@ -554,7 +651,7 @@ describe('test-import', () => {
         addedLines: new Map([['src/a.ts', new Set([1, 2, 3, 4, 5])]]),
         renamedFrom: new Map(),
       };
-      const result = runLineChecks(dir, scope, { extras: false });
+      const result = runLineChecks(dir, scope, { extras: false, testGlobs: DEFAULT_TEST_GLOBS });
       expect(result.ok).toBe(true);
       if (result.ok) {
         const hits = result.value.filter((hit) => hit.rule === 'test-import');
@@ -618,7 +715,7 @@ function testEnvHits(
   filePath: string,
   sourceText: string,
   addedLines: ReadonlySet<number>,
-  options: Parameters<typeof scanAddedSource>[3] = {},
+  options: Partial<ScanAddedSourceOptions> = {},
 ) {
   return ruleHits('test-env', filePath, sourceText, addedLines, { testImports: false, ...options });
 }
@@ -713,22 +810,13 @@ describe('test-env', () => {
     ]);
   });
 
-  it('skips test files matching default or custom testGlobs', () => {
-    const source = "if (process.env.VITEST || process.env.NODE_ENV === 'test') {}\n";
-    expect(testEnvHits('src/a.test.ts', source, new Set([1]))).toEqual([]);
-    expect(testEnvHits('src/__tests__/x.ts', source, new Set([1]))).toEqual([]);
-    expect(testEnvHits('vitest.config.ts', source, new Set([1]))).toEqual([]);
-    expect(
-      testEnvHits('src/fixtures/seed.ts', source, new Set([1]), {
-        testGlobs: ['src/fixtures/**'],
-      }),
-    ).toEqual([]);
-    expect(
-      testEnvHits('src/a.test.ts', source, new Set([1]), {
-        testGlobs: ['src/fixtures/**'],
-      }),
-    ).toHaveLength(2);
-    expect(testEnvHits('src/a.test.ts', source, new Set([1]), { testGlobs: [] })).toHaveLength(2);
+  it('skips test files matching default or custom testGlobs', async () => {
+    await expectTestGlobSkipping(
+      'gate-test-env-globs-',
+      'test-env',
+      "if (process.env.VITEST || process.env.NODE_ENV === 'test') {}\n",
+      2,
+    );
   });
 
   it('flags custom testEnvNames on process.env and import.meta.env in dot and bracket forms', () => {
@@ -786,7 +874,7 @@ describe('docs are not scanned as source', () => {
     try {
       fs.writeFileSync(path.join(dir, 'README.md'), '* never add eslint-disable\n');
       const scope = addedFileScope('README.md');
-      const hits = runLineChecks(dir, scope);
+      const hits = runLineChecks(dir, scope, DEFAULT_SCAN_OPTIONS);
       expect(hits.ok).toBe(true);
       if (hits.ok) {
         expect(hits.value).toEqual([]);

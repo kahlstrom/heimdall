@@ -8,7 +8,6 @@ import * as ts from 'typescript';
 import { isTestFile } from './config.js';
 import { matchesAnyGlob } from './glob.js';
 import {
-  DEFAULT_TEST_GLOBS,
   NO_SILENCING_FILE_EXT_RE,
   SOURCE_FILE_EXT_RE,
   err,
@@ -71,7 +70,7 @@ export type ScanAddedSourceOptions = {
   readonly testImports?: boolean;
   readonly testEnv?: boolean;
   readonly testEnvNames?: readonly string[];
-  readonly testGlobs?: readonly string[];
+  readonly testGlobs: readonly string[];
   readonly repoRoot?: string;
   /** When true, also flag new secretlint-disable / gitleaks:allow comments. */
   readonly secrets?: boolean;
@@ -84,20 +83,20 @@ export type LineCheckOptions = {
   readonly allowSilencing?: readonly string[];
   readonly allowTestImports?: readonly string[];
   readonly testEnvNames?: readonly string[];
-  readonly testGlobs?: readonly string[];
+  readonly testGlobs: readonly string[];
   readonly secrets?: boolean;
   readonly commentPatterns?: readonly RegExp[];
 };
 
-function suppressionKind(commentText: string, secrets: boolean): string | undefined {
+function commentSuppressions(commentText: string): {
+  readonly secretKind: string | undefined;
+  readonly otherKind: string | undefined;
+} {
   const kinds = [...commentText.matchAll(new RegExp(SUPPRESSION_RE, 'g'))].map((match) => match[0]);
-  if (secrets) {
-    const secretKind = kinds.find((kind) => SECRET_SUPPRESSION_KINDS.has(kind));
-    if (secretKind !== undefined) {
-      return secretKind;
-    }
-  }
-  return kinds.find((kind) => !SECRET_SUPPRESSION_KINDS.has(kind));
+  return {
+    secretKind: kinds.find((kind) => SECRET_SUPPRESSION_KINDS.has(kind)),
+    otherKind: kinds.find((kind) => !SECRET_SUPPRESSION_KINDS.has(kind)),
+  };
 }
 
 function suppressionMessage(kind: string, line: string): string {
@@ -270,8 +269,9 @@ function isSilencingUnderscoreBinding(node: ts.Node): string | undefined {
   return undefined;
 }
 
-function commentPatternMessage(pattern: RegExp, commentText: string): string {
-  return `matches /${pattern.source}/: ${commentText.trim()}`;
+function commentPatternMessage(pattern: RegExp, commentText: string, redact: boolean): string {
+  // Secret-scanner comments may sit on a line that still holds a secret.
+  return redact ? `matches /${pattern.source}/` : `matches /${pattern.source}/: ${commentText.trim()}`;
 }
 
 function isTestFrameworkSpecifier(specifier: string): boolean {
@@ -503,14 +503,13 @@ export function scanAddedSource(
   filePath: string,
   sourceText: string,
   addedLines: ReadonlySet<number>,
-  options: ScanAddedSourceOptions = {},
+  options: ScanAddedSourceOptions,
 ): Finding[] {
   const extras = options.extras !== false;
   const noSilencing = options.noSilencing !== false;
-  const testGlobs = options.testGlobs ?? DEFAULT_TEST_GLOBS;
-  const isNonTestFile = !isTestFile(filePath, testGlobs);
-  const testImports = options.testImports !== false && isNonTestFile;
-  const testEnv = options.testEnv !== false && isNonTestFile;
+  const testGlobs = options.testGlobs;
+  const testImports = options.testImports !== false;
+  const testEnv = options.testEnv !== false;
   const customTestEnvNames = new Set(options.testEnvNames ?? []);
   const repoRoot = options.repoRoot;
   const secrets = options.secrets === true;
@@ -523,7 +522,8 @@ export function scanAddedSource(
     if (commentText === '') {
       continue;
     }
-    const suppression = suppressionKind(commentText, secrets);
+    const { secretKind, otherKind } = commentSuppressions(commentText);
+    const suppression = (secrets ? secretKind : undefined) ?? otherKind;
     if (suppression !== undefined) {
       const message = suppressionMessage(suppression, line);
       if (extras) {
@@ -535,7 +535,13 @@ export function scanAddedSource(
     }
     const matchedPattern = commentPatterns.find((pattern) => commentText.search(pattern) !== -1);
     if (matchedPattern !== undefined) {
-      push(hits, filePath, lineNumber, 'comment-pattern', commentPatternMessage(matchedPattern, commentText));
+      push(
+        hits,
+        filePath,
+        lineNumber,
+        'comment-pattern',
+        commentPatternMessage(matchedPattern, commentText, secretKind !== undefined),
+      );
     }
   }
 
@@ -605,13 +611,13 @@ export function scanAddedSource(
 export function runLineChecks(
   repoRoot: string,
   scope: DiffScope,
-  options: LineCheckOptions = {},
+  options: LineCheckOptions,
 ): Result<Finding[]> {
   const extras = options.extras !== false;
   const allowSilencing = options.allowSilencing ?? [];
   const allowTestImports = options.allowTestImports ?? [];
   const testEnvNames = options.testEnvNames ?? [];
-  const testGlobs = options.testGlobs ?? DEFAULT_TEST_GLOBS;
+  const testGlobs = options.testGlobs;
   const secrets = options.secrets === true;
   const commentPatterns = options.commentPatterns ?? [];
   const hits: Finding[] = [];

@@ -289,7 +289,7 @@ Built-in. No command.
 | `enabled` | boolean | `true` if the object is present without `enabled: false` | `true` |
 | `allowSilencing` | array of non-empty glob strings | `[]` | `["src/generated/**"]` |
 | `allowTestImports` | array of non-empty glob strings | `[]` | `["src/test-utils/**"]` |
-| `commentPatterns` | array of non-empty regex strings (compiled with no flags; invalid regex is a GATE ERROR) | `[]` (check off) | `["\\bPhase \\d+\\b", "\\b[A-Z][A-Z0-9]+-\\d+\\b"]` |
+| `commentPatterns` | array of non-empty regex strings (compiled with no flags; invalid regex is a GATE ERROR) | `[]` (check off) | `["\\bPhase \\d+\\b", "\\b(?:JIRA|ABC)-\\d+\\b"]` |
 | `testEnvNames` | array of non-empty strings | `[]` | `["PLAYWRIGHT_TEST", "E2E_MODE"]` |
 
 ### New problems only

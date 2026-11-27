@@ -146,7 +146,7 @@ function expectKnipAllIssueTypes(findings: readonly { rule: string; file: string
 describe('parseKnipJson', () => {
   it('parses the captured knip JSON reporter fixture, including unused files', () => {
     const raw: unknown = JSON.parse(fs.readFileSync(KNIP_JSON_REPORTER_FIXTURE, 'utf8'));
-    const parsed = parseKnipJson(raw);
+    const parsed = parseKnipJson(raw, 'knip');
     expect(parsed.ok).toBe(true);
     if (parsed.ok) {
       expectKnipAllIssueTypes(parsed.value);
@@ -168,7 +168,7 @@ describe('parseKnipJson', () => {
   });
 
   it('parses v6 unused files as {name} objects', () => {
-    const parsed = parseKnipJson({ files: [{ name: 'src/orphan.ts' }], issues: [] });
+    const parsed = parseKnipJson({ files: [{ name: 'src/orphan.ts' }], issues: [] }, 'knip');
     expect(parsed.ok).toBe(true);
     if (parsed.ok) {
       expect(parsed.value[0]?.file).toBe('src/orphan.ts');
@@ -181,7 +181,7 @@ describe('parseKnipJson', () => {
     const parsed = parseKnipJson({
       files: ['src/orphan.ts'],
       issues: [{ file: 'src/a.ts', exports: [{ name: 'unusedExport', line: 4 }] }],
-    });
+    }, 'knip');
     expect(parsed.ok).toBe(true);
     if (parsed.ok) {
       expect(parsed.value.some((hit) => hit.rule === 'files' && hit.file === 'src/orphan.ts')).toBe(true);
@@ -206,7 +206,7 @@ describe('parseKnipJson', () => {
           nsTypes: [{ name: 'HiddenType', line: 3 }],
         },
       ],
-    });
+    }, 'knip');
     expect(parsed.ok).toBe(true);
     if (parsed.ok) {
       expect(parsed.value.some((hit) => hit.rule === 'optionalPeerDependencies' && hit.message === 'react')).toBe(true);
@@ -217,14 +217,14 @@ describe('parseKnipJson', () => {
   });
 
   it('rejects a non-object', () => {
-    expect(parseKnipJson([]).ok).toBe(false);
+    expect(parseKnipJson([], 'knip').ok).toBe(false);
   });
 
   it('is a GATE ERROR when knip adds an unknown non-empty issue type', () => {
     const parsed = parseKnipJson({
       files: [],
       issues: [{ file: 'src/a.ts', cycles: ['src/a.ts', 'src/b.ts'] }],
-    });
+    }, 'knip');
     expect(parsed.ok).toBe(false);
     if (!parsed.ok) {
       expect(parsed.error).toMatch(/unknown issue type "cycles"/);
@@ -235,7 +235,7 @@ describe('parseKnipJson', () => {
     const parsed = parseKnipJson({
       files: [],
       issues: [null, { file: '' }, { file: 'src/a.ts', exports: [], dependencies: [] }],
-    });
+    }, 'knip');
     expect(parsed.ok).toBe(true);
     if (parsed.ok) {
       expect(parsed.value).toEqual([]);

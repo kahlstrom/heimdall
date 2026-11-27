@@ -410,7 +410,7 @@ function parseRegexArray(value: unknown, pathPrefix: string): Result<readonly Re
 /** True when repo-relative `filePath` matches any glob in `testGlobs`. */
 export function isTestFile(
   filePath: string,
-  testGlobs: readonly string[] = DEFAULT_TEST_GLOBS,
+  testGlobs: readonly string[],
 ): boolean {
   return matchesAnyGlob(filePath, testGlobs);
 }

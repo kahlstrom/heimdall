@@ -156,7 +156,7 @@ describe('configs/example/heimdall.config.json', () => {
     expect(knipProd?.command).not.toContain('npx');
     expect(knipProd?.command).not.toMatch(PERSONAL_PATH_RE);
     const patternSources = (config.steps['line-checks']?.commentPatterns ?? []).map((re) => re.source);
-    expect(patternSources).toEqual(['\\bPhase \\d+\\b', '\\b[A-Z][A-Z0-9]+-\\d+\\b']);
+    expect(patternSources).toEqual(['\\bPhase \\d+\\b', '\\b(?:JIRA|ABC)-\\d+\\b']);
     expect(config.testGlobs).toEqual(DEFAULT_TEST_GLOBS);
   });
 });
