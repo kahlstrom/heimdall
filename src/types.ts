@@ -16,6 +16,17 @@ export const DEFAULT_STEP_TIMEOUT_MS = 300_000;
 /** Default cap on changed files versus the resolved base (including untracked). */
 export const DEFAULT_MAX_CHANGED_FILES = 100;
 
+/** Default repo-relative globs identifying test and config files. */
+export const DEFAULT_TEST_GLOBS = [
+  '**/*.test.*',
+  '**/*.spec.*',
+  '**/__tests__/**',
+  '**/test/**',
+  '**/tests/**',
+  '**/e2e/**',
+  '**/*.config.*',
+] as const;
+
 export type ExitCode = typeof EXIT_GREEN | typeof EXIT_RED | typeof EXIT_GATE_ERROR;
 
 export const COMMAND_STEP_NAMES = [
@@ -72,6 +83,7 @@ export type EslintStepConfig = CommandStepConfig & {
 export type LineChecksConfig = {
   readonly enabled: boolean;
   readonly allowSilencing: readonly string[];
+  readonly allowTestImports: readonly string[];
   readonly commentPatterns: readonly RegExp[];
 };
 
@@ -97,6 +109,8 @@ export type GateConfig = {
   readonly teardown: readonly string[];
   /** Repo-relative globs. Empty means the check is off. */
   readonly protectedPaths: readonly string[];
+  /** Repo-relative globs for test files. Absent defaults to DEFAULT_TEST_GLOBS; empty matches nothing. */
+  readonly testGlobs: readonly string[];
 };
 
 export type DiffScope = {

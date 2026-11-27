@@ -2,8 +2,13 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { flakeLooksLikeFile, parseGateConfig } from './config.js';
-import { COMMAND_STEP_NAMES, DEFAULT_STEP_TIMEOUT_MS, type GateConfig } from './types.js';
+import { flakeLooksLikeFile, isTestFile, parseGateConfig } from './config.js';
+import {
+  COMMAND_STEP_NAMES,
+  DEFAULT_STEP_TIMEOUT_MS,
+  DEFAULT_TEST_GLOBS,
+  type GateConfig,
+} from './types.js';
 
 describe('tsconfig.json', () => {
   it('includes test files in the default typecheck project', () => {
@@ -399,9 +404,12 @@ describe('parseGateConfig', () => {
     const parsed = parseGateConfig({ steps: { 'line-checks': true } }, 'x');
     expect(parsed.ok).toBe(true);
     if (parsed.ok) {
-      expect(parsed.value.steps['line-checks']?.enabled).toBe(true);
-      expect(parsed.value.steps['line-checks']?.allowSilencing).toEqual([]);
-      expect(parsed.value.steps['line-checks']?.commentPatterns).toEqual([]);
+      expect(parsed.value.steps['line-checks']).toEqual({
+        enabled: true,
+        allowSilencing: [],
+        allowTestImports: [],
+        commentPatterns: [],
+      });
     }
   });
 
@@ -412,8 +420,12 @@ describe('parseGateConfig', () => {
     );
     expect(parsed.ok).toBe(true);
     if (parsed.ok) {
-      expect(parsed.value.steps['line-checks']?.allowSilencing).toEqual(['src/generated/**']);
-      expect(parsed.value.steps['line-checks']?.commentPatterns).toEqual([]);
+      expect(parsed.value.steps['line-checks']).toEqual({
+        enabled: true,
+        allowSilencing: ['src/generated/**'],
+        allowTestImports: [],
+        commentPatterns: [],
+      });
     }
   });
 
@@ -425,6 +437,33 @@ describe('parseGateConfig', () => {
     expect(parsed.ok).toBe(false);
     if (!parsed.ok) {
       expect(parsed.error).toMatch(/steps\.line-checks\.allowSilencing/);
+    }
+  });
+
+  it('accepts steps.line-checks.allowTestImports globs and rejects invalid values', () => {
+    const valid = parseGateConfig(
+      { steps: { 'line-checks': { allowTestImports: ['src/test-utils/**'] } } },
+      'x',
+    );
+    expect(valid.ok).toBe(true);
+    if (valid.ok) {
+      expect(valid.value.steps['line-checks']?.allowTestImports).toEqual(['src/test-utils/**']);
+    }
+    const notArray = parseGateConfig(
+      { steps: { 'line-checks': { allowTestImports: 'src/test-utils/**' } } },
+      'x',
+    );
+    expect(notArray.ok).toBe(false);
+    if (!notArray.ok) {
+      expect(notArray.error).toMatch(/steps\.line-checks\.allowTestImports/);
+    }
+    const empty = parseGateConfig(
+      { steps: { 'line-checks': { allowTestImports: [''] } } },
+      'x',
+    );
+    expect(empty.ok).toBe(false);
+    if (!empty.ok) {
+      expect(empty.error).toMatch(/steps\.line-checks\.allowTestImports\[0\]/);
     }
   });
 
@@ -497,6 +536,55 @@ describe('parseGateConfig', () => {
   it('rejects a non-array or empty-string protectedPaths', () => {
     expect(parseGateConfig({ steps: { tests: { command: 't' } }, protectedPaths: 'secret.ts' }, 'x').ok).toBe(false);
     expect(parseGateConfig({ steps: { tests: { command: 't' } }, protectedPaths: [''] }, 'x').ok).toBe(false);
+  });
+
+  it('defaults testGlobs when absent and lets an explicit array replace defaults', () => {
+    const absent = parseGateConfig({ steps: { tests: { command: 't' } } }, 'x');
+    expect(absent.ok).toBe(true);
+    if (absent.ok) {
+      expect(absent.value.testGlobs).toEqual([
+        '**/*.test.*',
+        '**/*.spec.*',
+        '**/__tests__/**',
+        '**/test/**',
+        '**/tests/**',
+        '**/e2e/**',
+        '**/*.config.*',
+      ]);
+      expect(absent.value.testGlobs).toEqual(DEFAULT_TEST_GLOBS);
+    }
+    const custom = parseGateConfig(
+      { steps: { tests: { command: 't' } }, testGlobs: ['src/fixtures/**'] },
+      'x',
+    );
+    expect(custom.ok).toBe(true);
+    if (custom.ok) {
+      expect(custom.value.testGlobs).toEqual(['src/fixtures/**']);
+    }
+    const empty = parseGateConfig({ steps: { tests: { command: 't' } }, testGlobs: [] }, 'x');
+    expect(empty.ok).toBe(true);
+    if (empty.ok) {
+      expect(empty.value.testGlobs).toEqual([]);
+    }
+  });
+
+  it('rejects a non-array or empty-string testGlobs', () => {
+    const notArray = parseGateConfig(
+      { steps: { tests: { command: 't' } }, testGlobs: '**/*.test.*' },
+      'x',
+    );
+    expect(notArray.ok).toBe(false);
+    if (!notArray.ok) {
+      expect(notArray.error).toMatch(/testGlobs must be an array/);
+    }
+    const emptyEntry = parseGateConfig(
+      { steps: { tests: { command: 't' } }, testGlobs: ['   '] },
+      'x',
+    );
+    expect(emptyEntry.ok).toBe(false);
+    if (!emptyEntry.ok) {
+      expect(emptyEntry.error).toMatch(/testGlobs\[0\]/);
+    }
   });
 
   it('accepts setup and teardown command lists', () => {
@@ -690,6 +778,32 @@ describe('flakeLooksLikeFile', () => {
     expect(flakeLooksLikeFile('does the thing')).toBe(false);
     expect(flakeLooksLikeFile('foo.test.ts')).toBe(true);
     expect(flakeLooksLikeFile('src/foo')).toBe(true);
+  });
+});
+
+describe('isTestFile', () => {
+  it('matches default test and config globs and rejects production files', () => {
+    const testPaths = [
+      'src/a.test.ts',
+      'a.spec.js',
+      'src/__tests__/x.ts',
+      'test/helpers/gate-test.ts',
+      'packages/a/tests/unit.ts',
+      'e2e/login.ts',
+      'vitest.config.ts',
+    ];
+    for (const filePath of testPaths) {
+      expect(isTestFile(filePath, DEFAULT_TEST_GLOBS), filePath).toBe(true);
+    }
+    for (const filePath of ['src/a.ts', 'src/config.ts', 'src/test.ts', 'src/testing/a.ts']) {
+      expect(isTestFile(filePath, DEFAULT_TEST_GLOBS), filePath).toBe(false);
+    }
+  });
+
+  it('matches nothing when testGlobs is empty and honors custom globs', () => {
+    expect(isTestFile('src/a.test.ts', [])).toBe(false);
+    expect(isTestFile('src/fixtures/seed.ts', ['src/fixtures/**'])).toBe(true);
+    expect(isTestFile('src/a.test.ts', ['src/fixtures/**'])).toBe(false);
   });
 });
 

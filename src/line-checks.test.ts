@@ -3,7 +3,9 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { commentTextOfLine, runLineChecks, scanAddedSource } from './line-checks.js';
+import { lineChecksStep } from './steps.js';
 import type { DiffScope } from './types.js';
+import { commandResult, parseTestConfig } from '../test/helpers/gate-test.js';
 
 function addedFileScope(file: string): DiffScope {
   return {
@@ -382,11 +384,202 @@ describe('commentPatterns', () => {
           },
         ]);
       }
-      const empty = runLineChecks(dir, addedFileScope('src/missing.mts'), {
+      const empty = runLineChecks(dir, addedFileScope('src/missing.test.mts'), {
         extras: false,
         commentPatterns: [],
       });
       expect(empty).toEqual({ ok: true, value: [] });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+function testImportHits(
+  filePath: string,
+  sourceText: string,
+  addedLines: ReadonlySet<number>,
+  options: Parameters<typeof scanAddedSource>[3] = {},
+) {
+  return scanAddedSource(filePath, sourceText, addedLines, {
+    extras: false,
+    noSilencing: false,
+    ...options,
+  }).filter((hit) => hit.rule === 'test-import');
+}
+
+describe('test-import', () => {
+  it('flags added static imports, re-exports, require, and dynamic import of test frameworks', () => {
+    const cases: ReadonlyArray<{ label: string; source: string; expected: string }> = [
+      { label: 'named import', source: "import { describe } from 'vitest';\n", expected: '"vitest"' },
+      { label: 'subpath import', source: "import { defineConfig } from 'vitest/config';\n", expected: '"vitest/config"' },
+      { label: 'type import', source: "import type { Mock } from 'vitest';\n", expected: '"vitest"' },
+      { label: 'import equals require', source: "import v = require('vitest');\n", expected: '"vitest"' },
+      { label: 'import type node', source: "type M = import('vitest').Mock;\n", expected: '"vitest"' },
+      { label: 'export from', source: "export { expect } from 'chai';\n", expected: '"chai"' },
+      { label: 'export star', source: "export * from 'sinon';\n", expected: '"sinon"' },
+      { label: 'require', source: "const j = require('jest');\n", expected: '"jest"' },
+      { label: 'dynamic import', source: "const m = await import('mocha');\n", expected: '"mocha"' },
+      { label: 'template literal require', source: 'const t = require(`node:test`);\n', expected: '"node:test"' },
+      { label: '@jest scope', source: "import { jest } from '@jest/globals';\n", expected: '"@jest/globals"' },
+      { label: '@testing-library scope', source: "import { render } from '@testing-library/react';\n", expected: '"@testing-library/react"' },
+      { label: 'jasmine', source: "import 'jasmine';\n", expected: '"jasmine"' },
+      { label: 'ava', source: "import test from 'ava';\n", expected: '"ava"' },
+      { label: 'msw/node', source: "import { setupServer } from 'msw/node';\n", expected: '"msw/node"' },
+      { label: '@playwright/test', source: "import { test } from '@playwright/test';\n", expected: '"@playwright/test"' },
+      { label: 'cypress', source: "import 'cypress';\n", expected: '"cypress"' },
+    ];
+    for (const item of cases) {
+      const hits = testImportHits('src/a.ts', item.source, new Set([1]));
+      expect(hits, item.label).toHaveLength(1);
+      expect(hits[0]?.line, item.label).toBe(1);
+      expect(hits[0]?.message, item.label).toContain(item.expected);
+    }
+  });
+
+  it('does not flag non-test packages, aliases, dynamic specifiers, or strings', () => {
+    const lines = [
+      "import { http } from 'msw';",
+      "import { setupWorker } from 'msw/browser';",
+      "import { chromium } from 'playwright';",
+      "import avatar from 'avatar';",
+      "import chain from 'chain';",
+      "import { helper } from '@/test/helper';",
+      "const mod = require(dynamicName);",
+      'const lazy = import(`./${name}.test`);',
+      "const res = loader.require('vitest');",
+      "const text = \"import { describe } from 'vitest'\";",
+      "// import { describe } from 'vitest'",
+    ];
+    const added = new Set([...lines.keys()].map((index) => index + 1));
+    expect(testImportHits('src/a.ts', `${lines.join('\n')}\n`, added)).toEqual([]);
+  });
+
+  it('does not flag an unchanged pre-existing import line', () => {
+    const source = "import { vi } from 'vitest';\nexport const x = 1;\n";
+    expect(testImportHits('src/a.ts', source, new Set([2]))).toEqual([]);
+    const multiline = "import {\n  describe,\n  it,\n} from 'vitest';\n";
+    expect(testImportHits('src/a.ts', multiline, new Set([3]))).toEqual([]);
+    expect(testImportHits('src/a.ts', multiline, new Set([4]))).toHaveLength(1);
+  });
+
+  it('skips test files matching default or custom testGlobs', () => {
+    const source = "import { describe } from 'vitest';\n";
+    expect(testImportHits('src/a.test.ts', source, new Set([1]))).toEqual([]);
+    expect(testImportHits('src/__tests__/x.ts', source, new Set([1]))).toEqual([]);
+    expect(testImportHits('vitest.config.ts', source, new Set([1]))).toEqual([]);
+    expect(
+      testImportHits('src/fixtures/seed.ts', source, new Set([1]), {
+        testGlobs: ['src/fixtures/**'],
+      }),
+    ).toEqual([]);
+    expect(
+      testImportHits('src/a.test.ts', source, new Set([1]), {
+        testGlobs: ['src/fixtures/**'],
+      }),
+    ).toHaveLength(1);
+    expect(testImportHits('src/a.test.ts', source, new Set([1]), { testGlobs: [] })).toHaveLength(1);
+  });
+
+  it('resolves relative paths via extensions, .js->.ts, and /index against testGlobs without false positives', () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-test-imports-'));
+    try {
+      fs.mkdirSync(path.join(dir, 'src/__tests__'), { recursive: true });
+      fs.mkdirSync(path.join(dir, 'test'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'src/a.test.ts'), 'export const helper = 1;\n');
+      fs.writeFileSync(path.join(dir, 'src/__tests__/index.ts'), 'export const idx = 1;\n');
+      fs.writeFileSync(path.join(dir, 'test/index.ts'), 'export const t = 1;\n');
+      fs.writeFileSync(path.join(dir, 'src/test.ts'), 'export const prod = 1;\n');
+      fs.writeFileSync(
+        path.join(dir, 'src/a.ts'),
+        [
+          "import { helper } from './a.test';",
+          "export { helper as h2 } from './a.test.js';",
+          "import { idx } from './__tests__';",
+          "const t = require('../test');",
+          "import { prod } from './test';",
+        ].join('\n') + '\n',
+      );
+      const scope: DiffScope = {
+        baseRef: 'main',
+        mergeBaseSha: 'a',
+        changedFiles: new Set(['src/a.ts']),
+        addedLines: new Map([['src/a.ts', new Set([1, 2, 3, 4, 5])]]),
+        renamedFrom: new Map(),
+      };
+      const result = runLineChecks(dir, scope, { extras: false });
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        const hits = result.value.filter((hit) => hit.rule === 'test-import');
+        expect(hits.map((hit) => hit.line)).toEqual([1, 2, 3, 4]);
+        expect(hits[0]?.message).toContain('src/a.test.ts');
+        expect(hits[1]?.message).toContain('src/a.test.ts');
+        expect(hits[2]?.message).toContain('src/__tests__/index.ts');
+        expect(hits[3]?.message).toContain('test/index.ts');
+      }
+      // Custom glob matching only .ts still catches .js -> .ts ESM imports.
+      const tsOnly = runLineChecks(dir, {
+        ...scope,
+        addedLines: new Map([['src/a.ts', new Set([2])]]),
+      }, {
+        extras: false,
+        testGlobs: ['**/*.test.ts'],
+      });
+      expect(tsOnly.ok).toBe(true);
+      if (tsOnly.ok) {
+        expect(tsOnly.value.filter((hit) => hit.rule === 'test-import')).toHaveLength(1);
+      }
+      // Empty testGlobs means no file is considered a test file.
+      const noGlobs = runLineChecks(dir, scope, { extras: false, testGlobs: [] });
+      expect(noGlobs.ok).toBe(true);
+      if (noGlobs.ok) {
+        expect(noGlobs.value.filter((hit) => hit.rule === 'test-import')).toEqual([]);
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('honors allowTestImports globs and lineChecksStep default-on / enabled:false behavior', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-allow-test-imports-'));
+    try {
+      fs.mkdirSync(path.join(dir, 'src/test-utils'), { recursive: true });
+      fs.writeFileSync(path.join(dir, 'src/a.ts'), "import { describe } from 'vitest';\n");
+      fs.writeFileSync(path.join(dir, 'src/test-utils/render.ts'), "import { render } from '@testing-library/react';\n");
+      const noopRun = async () => commandResult();
+
+      const omittedConfig = parseTestConfig({ steps: { tests: { command: 't' } } });
+      expect(lineChecksStep.isEnabled(omittedConfig)).toBe(true);
+      const omittedResult = await lineChecksStep.run({
+        cwd: dir,
+        tmpDir: dir,
+        config: omittedConfig,
+        scope: addedFileScope('src/a.ts'),
+        runCommand: noopRun,
+        env: {},
+      });
+      expect(omittedResult.kind).toBe('fail');
+      if (omittedResult.kind === 'fail') {
+        expect(omittedResult.findings.map((finding) => finding.rule)).toEqual(['test-import']);
+      }
+
+      const exemptConfig = parseTestConfig({
+        steps: { 'line-checks': { allowTestImports: ['src/test-utils/**'] } },
+      });
+      const exemptResult = await lineChecksStep.run({
+        cwd: dir,
+        tmpDir: dir,
+        config: exemptConfig,
+        scope: addedFileScope('src/test-utils/render.ts'),
+        runCommand: noopRun,
+        env: {},
+      });
+      expect(exemptResult.kind).toBe('pass');
+
+      const disabledConfig = parseTestConfig({
+        steps: { tests: { command: 't' }, 'line-checks': { enabled: false } },
+      });
+      expect(lineChecksStep.isEnabled(disabledConfig)).toBe(false);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

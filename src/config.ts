@@ -7,10 +7,12 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseFlakeId } from './flakes.js';
+import { matchesAnyGlob } from './glob.js';
 import {
   COMMAND_STEP_NAMES,
   DEFAULT_MAX_CHANGED_FILES,
   DEFAULT_STEP_TIMEOUT_MS,
+  DEFAULT_TEST_GLOBS,
   SOURCE_FILE_EXT_RE,
   STEP_NAMES,
   err,
@@ -35,11 +37,17 @@ const TOP_LEVEL_KEYS = new Set([
   'setup',
   'teardown',
   'protectedPaths',
+  'testGlobs',
 ]);
 const STEP_KEYS = new Set<StepName>(STEP_NAMES);
 const COMMAND_STEP_FIELD_KEYS = new Set(['enabled', 'command', 'timeoutMs']);
 const ESLINT_STEP_FIELD_KEYS = new Set(['enabled', 'command', 'timeoutMs', 'maxWarnings']);
-const LINE_CHECKS_FIELD_KEYS = new Set(['enabled', 'allowSilencing', 'commentPatterns']);
+const LINE_CHECKS_FIELD_KEYS = new Set([
+  'enabled',
+  'allowSilencing',
+  'allowTestImports',
+  'commentPatterns',
+]);
 
 export const DEFAULT_CONFIG_NAME = 'heimdall.config.json';
 export const LEGACY_CONFIG_NAME = 'gate.config.json';
@@ -398,10 +406,19 @@ function parseRegexArray(value: unknown, pathPrefix: string): Result<readonly Re
   return ok(compiled);
 }
 
+/** True when repo-relative `filePath` matches any glob in `testGlobs`. */
+export function isTestFile(
+  filePath: string,
+  testGlobs: readonly string[] = DEFAULT_TEST_GLOBS,
+): boolean {
+  return matchesAnyGlob(filePath, testGlobs);
+}
+
 function defaultLineChecksConfig(enabled: boolean): LineChecksConfig {
   return {
     enabled,
     allowSilencing: [],
+    allowTestImports: [],
     commentPatterns: [],
   };
 }
@@ -430,6 +447,13 @@ function parseLineChecks(value: unknown): Result<LineChecksConfig | undefined> {
   if (!allowSilencing.ok) {
     return allowSilencing;
   }
+  const allowTestImports = parseStringArray(
+    value.allowTestImports,
+    'steps.line-checks.allowTestImports',
+  );
+  if (!allowTestImports.ok) {
+    return allowTestImports;
+  }
   const commentPatterns = parseRegexArray(value.commentPatterns, 'steps.line-checks.commentPatterns');
   if (!commentPatterns.ok) {
     return commentPatterns;
@@ -437,6 +461,7 @@ function parseLineChecks(value: unknown): Result<LineChecksConfig | undefined> {
   return ok({
     enabled: value.enabled !== false,
     allowSilencing: allowSilencing.value,
+    allowTestImports: allowTestImports.value,
     commentPatterns: commentPatterns.value,
   });
 }
@@ -540,6 +565,13 @@ export function parseGateConfig(raw: unknown, configPath: string): Result<GateCo
   if (!protectedPaths.ok) {
     return protectedPaths;
   }
+  const testGlobs =
+    raw.testGlobs === undefined
+      ? ok<readonly string[]>(DEFAULT_TEST_GLOBS)
+      : parseStringArray(raw.testGlobs, 'testGlobs');
+  if (!testGlobs.ok) {
+    return testGlobs;
+  }
 
   const enabledCount =
     COMMAND_STEP_NAMES.filter((name) => commandSteps[name]?.enabled).length +
@@ -561,6 +593,7 @@ export function parseGateConfig(raw: unknown, configPath: string): Result<GateCo
     setup: setup.value,
     teardown: teardown.value,
     protectedPaths: protectedPaths.value,
+    testGlobs: testGlobs.value,
   });
 }
 

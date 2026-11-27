@@ -5,8 +5,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import * as ts from 'typescript';
+import { isTestFile } from './config.js';
 import { matchesAnyGlob } from './glob.js';
 import {
+  DEFAULT_TEST_GLOBS,
   NO_SILENCING_FILE_EXT_RE,
   SOURCE_FILE_EXT_RE,
   err,
@@ -20,9 +22,46 @@ import {
 const SUPPRESSION_RE = /eslint-disable|@ts-ignore|@ts-expect-error|@ts-nocheck|secretlint-disable|gitleaks:allow/;
 const SECRET_SUPPRESSION_KINDS = new Set(['secretlint-disable', 'gitleaks:allow']);
 
+const TEST_FRAMEWORK_PACKAGES = [
+  'vitest',
+  'jest',
+  'mocha',
+  'jasmine',
+  'ava',
+  'node:test',
+  'sinon',
+  'chai',
+  'msw/node',
+  '@playwright/test',
+  'cypress',
+] as const;
+const TEST_FRAMEWORK_SCOPES = ['@jest/', '@testing-library/'] as const;
+
+const RESOLVE_EXTENSIONS = [
+  '.ts',
+  '.tsx',
+  '.js',
+  '.jsx',
+  '.mts',
+  '.cts',
+  '.mjs',
+  '.cjs',
+  '.d.ts',
+] as const;
+const TS_SOURCE_EXTENSIONS = new Set(['.ts', '.tsx', '.mts', '.cts']);
+const JS_TO_TS_EXTENSIONS: Readonly<Record<string, readonly string[]>> = {
+  '.js': ['.js', '.ts', '.tsx', '.jsx', '.d.ts'],
+  '.jsx': ['.jsx', '.tsx'],
+  '.mjs': ['.mjs', '.mts'],
+  '.cjs': ['.cjs', '.cts'],
+};
+
 export type ScanAddedSourceOptions = {
   readonly extras?: boolean;
   readonly noSilencing?: boolean;
+  readonly testImports?: boolean;
+  readonly testGlobs?: readonly string[];
+  readonly repoRoot?: string;
   /** When true, also flag new secretlint-disable / gitleaks:allow comments. */
   readonly secrets?: boolean;
   /** Compiled patterns checked against added comment lines in JS/TS files. */
@@ -32,6 +71,8 @@ export type ScanAddedSourceOptions = {
 export type LineCheckOptions = {
   readonly extras?: boolean;
   readonly allowSilencing?: readonly string[];
+  readonly allowTestImports?: readonly string[];
+  readonly testGlobs?: readonly string[];
   readonly secrets?: boolean;
   readonly commentPatterns?: readonly RegExp[];
 };
@@ -221,6 +262,147 @@ function commentPatternMessage(pattern: RegExp, commentText: string): string {
   return `matches /${pattern.source}/: ${commentText.trim()}`;
 }
 
+function isTestFrameworkSpecifier(specifier: string): boolean {
+  for (const pkg of TEST_FRAMEWORK_PACKAGES) {
+    if (specifier === pkg || specifier.startsWith(`${pkg}/`)) {
+      return true;
+    }
+  }
+  for (const scope of TEST_FRAMEWORK_SCOPES) {
+    if (specifier.startsWith(scope)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isRelativeSpecifier(specifier: string): boolean {
+  return (
+    specifier === '.' ||
+    specifier === '..' ||
+    specifier.startsWith('./') ||
+    specifier.startsWith('../')
+  );
+}
+
+function isExistingFile(absPath: string): boolean {
+  try {
+    return fs.statSync(absPath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function relativeResolveCandidates(
+  joined: string,
+  isDirSpecifier: boolean,
+): { readonly disk: readonly string[]; readonly fallback: readonly string[] } {
+  if (isDirSpecifier) {
+    const dir = joined.replace(/\/+$/, '');
+    const indexCandidates = RESOLVE_EXTENSIONS.map((ext) =>
+      dir === '' || dir === '.' ? `index${ext}` : `${dir}/index${ext}`,
+    );
+    return { disk: indexCandidates, fallback: indexCandidates };
+  }
+  const ext = path.posix.extname(joined).toLowerCase();
+  const mappedExts = JS_TO_TS_EXTENSIONS[ext];
+  if (mappedExts !== undefined) {
+    const stem = joined.slice(0, -ext.length);
+    const mapped = mappedExts.map((mappedExt) => `${stem}${mappedExt}`);
+    return { disk: mapped, fallback: mapped };
+  }
+  if (TS_SOURCE_EXTENSIONS.has(ext)) {
+    return { disk: [joined], fallback: [joined] };
+  }
+  const extCandidates = [joined, ...RESOLVE_EXTENSIONS.map((candidateExt) => `${joined}${candidateExt}`)];
+  const indexCandidates = RESOLVE_EXTENSIONS.map((candidateExt) => `${joined}/index${candidateExt}`);
+  return { disk: [...extCandidates, ...indexCandidates], fallback: extCandidates };
+}
+
+function resolvedTestFileTarget(
+  filePath: string,
+  specifier: string,
+  testGlobs: readonly string[],
+  repoRoot: string | undefined,
+): string | undefined {
+  if (!isRelativeSpecifier(specifier) || testGlobs.length === 0) {
+    return undefined;
+  }
+  const baseDir = path.posix.dirname(filePath.replace(/\\/g, '/').replace(/^\.?\/+/, ''));
+  const joined = path.posix.normalize(path.posix.join(baseDir, specifier));
+  if (joined === '..' || joined.startsWith('../')) {
+    return undefined;
+  }
+  const isDirSpecifier =
+    specifier === '.' ||
+    specifier === '..' ||
+    specifier.endsWith('/') ||
+    specifier.endsWith('/.') ||
+    specifier.endsWith('/..');
+  const { disk, fallback } = relativeResolveCandidates(joined, isDirSpecifier);
+  if (repoRoot !== undefined) {
+    for (const candidate of disk) {
+      if (isExistingFile(path.join(repoRoot, candidate))) {
+        return isTestFile(candidate, testGlobs) ? candidate : undefined;
+      }
+    }
+  }
+  for (const candidate of fallback) {
+    if (isTestFile(candidate, testGlobs)) {
+      return candidate;
+    }
+  }
+  return undefined;
+}
+
+function testImportMessage(
+  filePath: string,
+  specifier: string,
+  testGlobs: readonly string[],
+  repoRoot: string | undefined,
+): string | undefined {
+  if (isTestFrameworkSpecifier(specifier)) {
+    return `imports test framework ${JSON.stringify(specifier)}`;
+  }
+  const target = resolvedTestFileTarget(filePath, specifier, testGlobs, repoRoot);
+  if (target !== undefined) {
+    return `imports test file ${JSON.stringify(specifier)} (${target})`;
+  }
+  return undefined;
+}
+
+function stringLiteralLike(node: ts.Expression | undefined): ts.StringLiteralLike | undefined {
+  if (node !== undefined && (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node))) {
+    return node;
+  }
+  return undefined;
+}
+
+function importSpecifierNode(node: ts.Node): ts.StringLiteralLike | undefined {
+  if (ts.isImportDeclaration(node) || ts.isExportDeclaration(node)) {
+    return stringLiteralLike(node.moduleSpecifier);
+  }
+  if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
+    return stringLiteralLike(node.moduleReference.expression);
+  }
+  if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
+    return ts.isStringLiteral(node.argument.literal) ? node.argument.literal : undefined;
+  }
+  if (ts.isCallExpression(node)) {
+    if (node.expression.kind === ts.SyntaxKind.ImportKeyword) {
+      return stringLiteralLike(node.arguments[0]);
+    }
+    if (
+      ts.isIdentifier(node.expression) &&
+      node.expression.text === 'require' &&
+      node.arguments.length === 1
+    ) {
+      return stringLiteralLike(node.arguments[0]);
+    }
+  }
+  return undefined;
+}
+
 /**
  * Scan one file's added lines for rule-gaming hits.
  */
@@ -232,6 +414,9 @@ export function scanAddedSource(
 ): Finding[] {
   const extras = options.extras !== false;
   const noSilencing = options.noSilencing !== false;
+  const testGlobs = options.testGlobs ?? DEFAULT_TEST_GLOBS;
+  const testImports = options.testImports !== false && !isTestFile(filePath, testGlobs);
+  const repoRoot = options.repoRoot;
   const secrets = options.secrets === true;
   const commentPatterns = options.commentPatterns ?? [];
   const hits: Finding[] = [];
@@ -258,7 +443,7 @@ export function scanAddedSource(
     }
   }
 
-  if (!extras && !noSilencing) {
+  if (!extras && !noSilencing && !testImports) {
     return hits;
   }
 
@@ -299,6 +484,19 @@ export function scanAddedSource(
         push(hits, filePath, line, 'no-silencing', underscore);
       }
     }
+    if (testImports) {
+      const specifierNode = importSpecifierNode(node);
+      if (specifierNode !== undefined) {
+        const specifierLine =
+          sourceFile.getLineAndCharacterOfPosition(specifierNode.getStart(sourceFile)).line + 1;
+        if (addedLines.has(specifierLine)) {
+          const message = testImportMessage(filePath, specifierNode.text, testGlobs, repoRoot);
+          if (message !== undefined) {
+            push(hits, filePath, specifierLine, 'test-import', message);
+          }
+        }
+      }
+    }
     ts.forEachChild(node, visit);
   };
   visit(sourceFile);
@@ -312,6 +510,8 @@ export function runLineChecks(
 ): Result<Finding[]> {
   const extras = options.extras !== false;
   const allowSilencing = options.allowSilencing ?? [];
+  const allowTestImports = options.allowTestImports ?? [];
+  const testGlobs = options.testGlobs ?? DEFAULT_TEST_GLOBS;
   const secrets = options.secrets === true;
   const commentPatterns = options.commentPatterns ?? [];
   const hits: Finding[] = [];
@@ -323,8 +523,10 @@ export function runLineChecks(
     const extrasOn = extras && isSource;
     const noSilencingOn =
       NO_SILENCING_FILE_EXT_RE.test(filePath) && !matchesAnyGlob(filePath, allowSilencing);
+    const testImportsOn =
+      isSource && !isTestFile(filePath, testGlobs) && !matchesAnyGlob(filePath, allowTestImports);
     const commentPatternsOn = commentPatterns.length > 0 && isSource;
-    if (!extrasOn && !noSilencingOn && !commentPatternsOn) {
+    if (!extrasOn && !noSilencingOn && !testImportsOn && !commentPatternsOn) {
       continue;
     }
     const abs = path.join(repoRoot, filePath);
@@ -337,6 +539,9 @@ export function runLineChecks(
     hits.push(...scanAddedSource(filePath, sourceText, addedLines, {
       extras: extrasOn,
       noSilencing: noSilencingOn,
+      testImports: testImportsOn,
+      testGlobs,
+      repoRoot,
       secrets,
       commentPatterns,
     }));
