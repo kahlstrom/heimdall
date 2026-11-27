@@ -34,6 +34,7 @@ export const COMMAND_STEP_NAMES = [
   'tests',
   'eslint',
   'knip',
+  'knip-production',
   'jscpd',
   'secrets',
   'architecture',
@@ -100,6 +101,7 @@ export type GateConfig = {
     readonly tests: CommandStepConfig | undefined;
     readonly eslint: EslintStepConfig | undefined;
     readonly knip: CommandStepConfig | undefined;
+    readonly 'knip-production': CommandStepConfig | undefined;
     readonly jscpd: CommandStepConfig | undefined;
     readonly secrets: CommandStepConfig | undefined;
     readonly architecture: CommandStepConfig | undefined;

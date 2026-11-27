@@ -51,7 +51,7 @@ function stepLine(result: StepResult): string {
 }
 
 function padName(name: string): string {
-  return name.padEnd(12, ' ');
+  return name.padEnd(15, ' ');
 }
 
 export function exitCodeLabel(code: number): string {

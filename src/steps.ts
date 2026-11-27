@@ -407,7 +407,7 @@ export const eslintStep: GateStep = {
 
 /**
  * Whole-project JSON tools that fail only on findings new versus the merge-base.
- * Skip the baseline run when the branch result is empty (knip, architecture).
+ * Skip the baseline run when the branch result is empty (knip, knip-production, architecture).
  */
 function newVsBaseCommandStep(
   name: CommandStepName,
@@ -450,6 +450,13 @@ function newVsBaseCommandStep(
 }
 
 export const knipStep: GateStep = newVsBaseCommandStep('knip', parseKnipOutput, identityMessage, noMetric);
+
+const knipProductionStep: GateStep = newVsBaseCommandStep(
+  'knip-production',
+  (output) => parseKnipOutput(output, 'knip-production'),
+  identityMessage,
+  noMetric,
+);
 
 /**
  * Materialize the merge-base under HEIMDALL_TMP (itself under os.tmpdir), run
@@ -754,6 +761,7 @@ export const STEPS: readonly GateStep[] = [
   testsStep,
   eslintStep,
   knipStep,
+  knipProductionStep,
   jscpdStep,
   secretsStep,
   architectureStep,

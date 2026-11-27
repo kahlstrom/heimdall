@@ -327,4 +327,37 @@ describe('formatReport completeness', () => {
     const text = formatReport(outcome);
     expect(text).toMatch(/tests\s+pass\s+\(excused 1: src\/bill\.test\.ts > suite > times out talking to billing\)/);
   });
+
+  it('aligns step status columns including knip-production', () => {
+    const outcome: GateOutcome = {
+      kind: 'red',
+      exitCode: EXIT_RED,
+      baseRef: 'main',
+      mergeBaseSha: MERGE_BASE_SHA,
+      headSha: HEAD_SHA,
+      warnings: [],
+      steps: [
+        { kind: 'pass', name: 'knip' },
+        {
+          kind: 'fail',
+          name: 'knip-production',
+          findings: [
+            {
+              step: 'knip-production',
+              file: 'src/lib.ts',
+              line: 3,
+              rule: 'exports',
+              message: 'onlyUsedInTests',
+            },
+          ],
+        },
+        { kind: 'pass', name: 'architecture' },
+      ],
+    };
+    const text = formatReport(outcome);
+    expect(text).toContain('src/lib.ts:3 [exports] onlyUsedInTests');
+    expect(text).toContain('knip            pass');
+    expect(text).toContain('knip-production FAIL  (1)');
+    expect(text).toContain('architecture    pass');
+  });
 });

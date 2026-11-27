@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { runCommand } from './command.js';
 import {
+  STEPS,
   architectureStep,
   eslintStep,
   findingsAtMergeBase,
@@ -1434,10 +1435,14 @@ function knipReport(body: Record<string, unknown>): string {
   return JSON.stringify(body);
 }
 
-function knipTwoShot(current: string, base: string): StepContext['runCommand'] {
+function knipTwoShot(
+  current: string,
+  base: string,
+  baseDir = 'knip-base',
+): StepContext['runCommand'] {
   return async (...args: Parameters<StepContext['runCommand']>) => {
     const cwd = args[1];
-    if (cwd.includes('knip-base')) {
+    if (cwd.includes(baseDir)) {
       return result({ exitCode: 1, stdout: base });
     }
     return result({ exitCode: 1, stdout: current });
@@ -1864,6 +1869,158 @@ describe('knipStep', () => {
         expect(step.kind).toBe('pass');
       } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+  });
+});
+
+function knipProductionStepFromSteps(): (typeof STEPS)[number] {
+  const step = STEPS.find((entry) => entry.name === 'knip-production');
+  if (!step) {
+    throw new Error('knip-production step missing from STEPS');
+  }
+  return step;
+}
+
+const KNIP_PRODUCTION_COMMAND = 'npx knip --production --reporter json --no-progress';
+
+describe('knip-production step', () => {
+  it('runs right after knip in STEPS', () => {
+    const names = STEPS.map((step) => step.name);
+    const knipIndex = names.indexOf('knip');
+    expect(knipIndex).toBeGreaterThanOrEqual(0);
+    expect(names[knipIndex + 1]).toBe('knip-production');
+  });
+
+  it('is disabled and skipped when absent from config', async () => {
+    const step = knipProductionStepFromSteps();
+    const withoutStep = cfg({ steps: { tests: { command: 't' } } });
+    expect(step.isEnabled(withoutStep)).toBe(false);
+    expect(
+      step.isEnabled(cfg({ steps: { tests: { command: 't' }, 'knip-production': { enabled: false } } })),
+    ).toBe(false);
+    expect(step.isEnabled(cfg({ steps: { 'knip-production': { command: KNIP_PRODUCTION_COMMAND } } }))).toBe(true);
+
+    const ran = await step.run(
+      ctx({
+        config: withoutStep,
+        runCommand: async () => {
+          throw new Error('should not run when absent');
+        },
+      }),
+    );
+    expect(ran).toEqual({ kind: 'skipped', name: 'knip-production', reason: 'disabled' });
+  });
+
+  it('fails only on findings new versus the merge-base, tags step knip-production, and uses its own baseline dir', async () => {
+    const step = knipProductionStepFromSteps();
+    await withKnipRepo(async ({ repo, tmpDir, scope }) => {
+      const current = knipReport({
+        files: ['src/only-tests.ts'],
+        issues: [
+          {
+            file: 'src/lib.ts',
+            exports: [{ name: 'testOnlyHelper', line: 1 }],
+            enumMembers: { Color: [{ name: 'Unused', line: 5 }] },
+            duplicates: [[{ name: 'dup', line: 9 }, { name: 'default', line: 10 }]],
+          },
+          { file: 'src/legacy.ts', exports: [{ name: 'leftover', line: 1 }] },
+        ],
+      });
+      const base = knipReport({
+        files: [],
+        issues: [{ file: 'src/legacy.ts', exports: [{ name: 'leftover', line: 1 }] }],
+      });
+      const seenCwds: string[] = [];
+      const res = await step.run(
+        ctx({
+          cwd: repo,
+          tmpDir,
+          scope,
+          config: cfg({ steps: { 'knip-production': { command: KNIP_PRODUCTION_COMMAND } } }),
+          runCommand: async (...args) => {
+            seenCwds.push(args[1]);
+            return knipTwoShot(current, base, 'knip-production-base')(...args);
+          },
+        }),
+      );
+      expect(seenCwds).toEqual([repo, path.join(tmpDir, 'knip-production-base')]);
+      expect(res.kind).toBe('fail');
+      if (res.kind === 'fail') {
+        expect(res.name).toBe('knip-production');
+        expect(res.findings.every((hit) => hit.step === 'knip-production')).toBe(true);
+        expect(res.findings.map((hit) => `${hit.rule}:${hit.message}`)).toEqual([
+          'files:src/only-tests.ts',
+          'exports:testOnlyHelper',
+          'enumMembers:Color.Unused',
+          'duplicates:dup|default',
+        ]);
+        expect(res.findings.some((hit) => hit.message === 'leftover')).toBe(false);
+      }
+    });
+  });
+
+  it('passes when the same finding also exists at the merge-base', async () => {
+    const step = knipProductionStepFromSteps();
+    await withKnipRepo(async ({ repo, tmpDir, scope }) => {
+      const report = knipReport({
+        files: [],
+        issues: [{ file: 'src/legacy.ts', exports: [{ name: 'leftover', line: 1 }] }],
+      });
+      const res = await step.run(
+        ctx({
+          cwd: repo,
+          tmpDir,
+          scope,
+          config: cfg({ steps: { 'knip-production': { command: KNIP_PRODUCTION_COMMAND } } }),
+          runCommand: knipTwoShot(report, report, 'knip-production-base'),
+        }),
+      );
+      expect(res).toEqual({ kind: 'pass', name: 'knip-production' });
+    });
+  });
+
+  it('catches an export unused in production even when plain knip passes', async () => {
+    const prodStep = knipProductionStepFromSteps();
+    await withKnipRepo(async ({ repo, tmpDir, scope }) => {
+      const config = cfg({
+        steps: {
+          knip: { command: 'npx knip --reporter json --no-progress' },
+          'knip-production': { command: KNIP_PRODUCTION_COMMAND },
+        },
+      });
+      const runCommand: StepContext['runCommand'] = async (command, cwd) => {
+        if (command === config.steps.knip?.command) {
+          return result({ exitCode: 0, stdout: knipReport({ files: [], issues: [] }) });
+        }
+        if (cwd.includes('knip-production-base')) {
+          return result({ exitCode: 0, stdout: knipReport({ files: [], issues: [] }) });
+        }
+        return result({
+          exitCode: 1,
+          stdout: knipReport({
+            files: [],
+            issues: [{ file: 'src/lib.ts', exports: [{ name: 'onlyUsedInTests', line: 3 }] }],
+          }),
+        });
+      };
+
+      const plain = await knipStep.run(ctx({ cwd: repo, tmpDir, scope, config, runCommand }));
+      const prod = await prodStep.run(ctx({ cwd: repo, tmpDir, scope, config, runCommand }));
+
+      expect(plain).toEqual({ kind: 'pass', name: 'knip' });
+      expect(prod.kind).toBe('fail');
+      if (prod.kind === 'fail') {
+        expect(prod.name).toBe('knip-production');
+        expect(prod.findings).toEqual([
+          {
+            step: 'knip-production',
+            file: 'src/lib.ts',
+            line: 3,
+            rule: 'exports',
+            message: 'onlyUsedInTests',
+          },
+        ]);
       }
     });
   });

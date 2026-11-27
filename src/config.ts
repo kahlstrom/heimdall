@@ -512,6 +512,7 @@ export function parseGateConfig(raw: unknown, configPath: string): Result<GateCo
     tests: CommandStepConfig | undefined;
     eslint: EslintStepConfig | undefined;
     knip: CommandStepConfig | undefined;
+    'knip-production': CommandStepConfig | undefined;
     jscpd: CommandStepConfig | undefined;
     secrets: CommandStepConfig | undefined;
     architecture: CommandStepConfig | undefined;
@@ -520,6 +521,7 @@ export function parseGateConfig(raw: unknown, configPath: string): Result<GateCo
     tests: undefined,
     eslint: undefined,
     knip: undefined,
+    'knip-production': undefined,
     jscpd: undefined,
     secrets: undefined,
     architecture: undefined,

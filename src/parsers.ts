@@ -119,15 +119,17 @@ const KNIP_ITEM_ARRAY_KEYS = new Set([
 const KNIP_MEMBER_OBJECT_KEYS = new Set(['enumMembers', 'classMembers']);
 const KNIP_NESTED_ARRAY_KEYS = new Set(['duplicates']);
 
-export function parseKnipOutput(output: string): Result<Finding[]> {
+type KnipStepName = 'knip' | 'knip-production';
+
+export function parseKnipOutput(output: string, step: KnipStepName = 'knip'): Result<Finding[]> {
   const json = extractJson(output);
   if (!json.ok) {
-    return err(`knip output is not JSON: ${json.error}`);
+    return err(`${step} output is not JSON: ${json.error}`);
   }
-  return parseKnipJson(json.value);
+  return parseKnipJson(json.value, step);
 }
 
-export function parseKnipJson(value: unknown): Result<Finding[]> {
+export function parseKnipJson(value: unknown, step: KnipStepName = 'knip'): Result<Finding[]> {
   if (!isRecord(value)) {
     return err('knip JSON must be an object');
   }
@@ -138,7 +140,7 @@ export function parseKnipJson(value: unknown): Result<Finding[]> {
 
   const findings: Finding[] = [];
   if (value.files !== undefined) {
-    const files = parseKnipUnusedFiles(value.files);
+    const files = parseKnipUnusedFiles(value.files, step);
     if (!files.ok) {
       return files;
     }
@@ -152,7 +154,7 @@ export function parseKnipJson(value: unknown): Result<Finding[]> {
       if (!isRecord(entry)) {
         continue;
       }
-      const row = parseKnipIssueRow(entry);
+      const row = parseKnipIssueRow(entry, step);
       if (!row.ok) {
         return row;
       }
@@ -162,27 +164,27 @@ export function parseKnipJson(value: unknown): Result<Finding[]> {
   return ok(findings);
 }
 
-function parseKnipUnusedFiles(files: unknown): Result<Finding[]> {
+function parseKnipUnusedFiles(files: unknown, step: KnipStepName): Result<Finding[]> {
   if (!Array.isArray(files)) {
     return err('knip JSON files must be an array');
   }
   const findings: Finding[] = [];
   for (const item of files) {
     if (typeof item === 'string' && item) {
-      findings.push(finding('knip', item, 0, 'files', item));
+      findings.push(finding(step, item, 0, 'files', item));
       continue;
     }
     if (isRecord(item)) {
       const name = asString(item.name, '');
       if (name) {
-        findings.push(finding('knip', name, 0, 'files', name));
+        findings.push(finding(step, name, 0, 'files', name));
       }
     }
   }
   return ok(findings);
 }
 
-function parseKnipIssueRow(entry: Record<string, unknown>): Result<Finding[]> {
+function parseKnipIssueRow(entry: Record<string, unknown>, step: KnipStepName): Result<Finding[]> {
   const file = asString(entry.file, '');
   if (!file) {
     return ok([]);
@@ -193,21 +195,21 @@ function parseKnipIssueRow(entry: Record<string, unknown>): Result<Finding[]> {
       continue;
     }
     if (KNIP_MEMBER_OBJECT_KEYS.has(key)) {
-      const members = addKnipMembers(findings, file, key, value);
+      const members = addKnipMembers(findings, file, key, value, step);
       if (!members.ok) {
         return members;
       }
       continue;
     }
     if (KNIP_NESTED_ARRAY_KEYS.has(key)) {
-      const groups = addKnipDuplicateGroups(findings, file, value);
+      const groups = addKnipDuplicateGroups(findings, file, value, step);
       if (!groups.ok) {
         return groups;
       }
       continue;
     }
     if (KNIP_ITEM_ARRAY_KEYS.has(key)) {
-      addKnipItems(findings, file, key, value);
+      addKnipItems(findings, file, key, value, step);
       continue;
     }
     return err(`knip JSON has unknown issue type ${JSON.stringify(key)}`);
@@ -215,13 +217,19 @@ function parseKnipIssueRow(entry: Record<string, unknown>): Result<Finding[]> {
   return ok(findings);
 }
 
-function addKnipItems(findings: Finding[], file: string, rule: string, items: unknown): void {
+function addKnipItems(
+  findings: Finding[],
+  file: string,
+  rule: string,
+  items: unknown,
+  step: KnipStepName,
+): void {
   if (!Array.isArray(items)) {
     return;
   }
   for (const item of items) {
     if (typeof item === 'string') {
-      findings.push(finding('knip', file, 0, rule, item));
+      findings.push(finding(step, file, 0, rule, item));
       continue;
     }
     if (!isRecord(item)) {
@@ -231,7 +239,7 @@ function addKnipItems(findings: Finding[], file: string, rule: string, items: un
     if (!name) {
       continue;
     }
-    findings.push(finding('knip', file, asNumber(item.line, 0), rule, name));
+    findings.push(finding(step, file, asNumber(item.line, 0), rule, name));
   }
 }
 
@@ -240,6 +248,7 @@ function addKnipMembers(
   file: string,
   rule: string,
   value: unknown,
+  step: KnipStepName,
 ): Result<void> {
   if (!isRecord(value)) {
     return err(`knip JSON ${rule} must be an object of member arrays`);
@@ -257,13 +266,18 @@ function addKnipMembers(
         continue;
       }
       const message = parent ? `${parent}.${name}` : name;
-      findings.push(finding('knip', file, asNumber(item.line, 0), rule, message));
+      findings.push(finding(step, file, asNumber(item.line, 0), rule, message));
     }
   }
   return ok(undefined);
 }
 
-function addKnipDuplicateGroups(findings: Finding[], file: string, value: unknown): Result<void> {
+function addKnipDuplicateGroups(
+  findings: Finding[],
+  file: string,
+  value: unknown,
+  step: KnipStepName,
+): Result<void> {
   if (!Array.isArray(value)) {
     return err('knip JSON duplicates must be an array of groups');
   }
@@ -287,7 +301,7 @@ function addKnipDuplicateGroups(findings: Finding[], file: string, value: unknow
       names.push(name);
     }
     if (names.length > 0) {
-      findings.push(finding('knip', file, line, 'duplicates', names.join('|')));
+      findings.push(finding(step, file, line, 'duplicates', names.join('|')));
     }
   }
   return ok(undefined);

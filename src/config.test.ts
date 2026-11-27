@@ -270,11 +270,12 @@ describe('heimdall.config.json', () => {
     for (const name of COMMAND_STEP_NAMES) {
       const command = own.value.steps[name]?.command;
       if (command === undefined) {
-        expect(['secrets', 'architecture']).toContain(name);
+        expect(['knip-production', 'secrets', 'architecture']).toContain(name);
         continue;
       }
       expect(command).toContain('npx --no-install');
     }
+    expect(own.value.steps['knip-production']).toBeUndefined();
     expect(own.value.steps.secrets).toBeUndefined();
     expect(own.value.steps.architecture).toBeUndefined();
     expect(example.steps.secrets?.enabled).toBe(false);
@@ -778,6 +779,72 @@ describe('parseGateConfig', () => {
     expect(missingCommand.ok).toBe(false);
     if (!missingCommand.ok) {
       expect(missingCommand.error).toMatch(/steps\.architecture\.command/);
+    }
+  });
+
+  it('leaves knip-production off when omitted, validates its keys, and counts it as an enabled step', () => {
+    const omitted = parseGateConfig({ steps: { tests: { command: 't' } } }, 'x');
+    expect(omitted.ok).toBe(true);
+    if (omitted.ok) {
+      expect(omitted.value.steps['knip-production']).toBeUndefined();
+    }
+
+    const enabledOnly = parseGateConfig(
+      {
+        steps: {
+          'knip-production': {
+            command: 'knip --production --reporter json --no-progress',
+            timeoutMs: 45_000,
+          },
+        },
+      },
+      'x',
+    );
+    expect(enabledOnly.ok).toBe(true);
+    if (enabledOnly.ok) {
+      expect(enabledOnly.value.steps['knip-production']).toEqual({
+        enabled: true,
+        command: 'knip --production --reporter json --no-progress',
+        timeoutMs: 45_000,
+      });
+    }
+
+    const missingCommand = parseGateConfig({ steps: { 'knip-production': { enabled: true } } }, 'x');
+    expect(missingCommand.ok).toBe(false);
+    if (!missingCommand.ok) {
+      expect(missingCommand.error).toMatch(/steps\.knip-production\.command/);
+    }
+
+    const unknownKey = parseGateConfig(
+      {
+        steps: {
+          'knip-production': {
+            command: 'knip --production --reporter json',
+            extra: true,
+          },
+        },
+      },
+      'x',
+    );
+    expect(unknownKey.ok).toBe(false);
+    if (!unknownKey.ok) {
+      expect(unknownKey.error).toMatch(/steps\.knip-production: unknown key.*"extra"/);
+    }
+
+    const badTimeout = parseGateConfig(
+      {
+        steps: {
+          'knip-production': {
+            command: 'knip --production --reporter json',
+            timeoutMs: 0,
+          },
+        },
+      },
+      'x',
+    );
+    expect(badTimeout.ok).toBe(false);
+    if (!badTimeout.ok) {
+      expect(badTimeout.error).toMatch(/steps\.knip-production\.timeoutMs/);
     }
   });
 });
