@@ -7,11 +7,11 @@ import {
   configFileInDiff,
   eslintMetricValue,
   filterFindingsToScope,
+  findingKeyBuilder,
   findingsNotInBase,
   identityMessage,
   loadDiffScope,
   mapArchitectureRenameMessage,
-  matchFindingKey,
   noMetric,
   parseChangedNewLines,
   relativizeFindingPaths,
@@ -205,8 +205,7 @@ describe('findingsNotInBase', () => {
     addedLines: new Map(),
     renamedFrom: new Map(),
   };
-  const keyOf = (finding: Finding): string =>
-    matchFindingKey(finding, identityScope, SCOPE_ROOT, identityMessage);
+  const keyOf = findingKeyBuilder(identityScope, SCOPE_ROOT, identityMessage);
 
   it('keeps a finding that is not in the base set, even on the same line', () => {
     const current = [hit('src/lib.ts', 'exports', 'helper', 4)];
@@ -243,8 +242,7 @@ describe('findingsNotInBase', () => {
   it('matches a finding in a renamed file under the old path', () => {
     const current = [hit('src/new.ts', 'exports', 'helper', 1)];
     const base = [hit('src/old.ts', 'exports', 'helper', 1)];
-    const renamedKeyOf = (finding: Finding): string =>
-      matchFindingKey(finding, renamedScope, SCOPE_ROOT, identityMessage);
+    const renamedKeyOf = findingKeyBuilder(renamedScope, SCOPE_ROOT, identityMessage);
     expect(findingsNotInBase(current, base, renamedKeyOf, noMetric)).toEqual([]);
   });
 
@@ -253,10 +251,9 @@ describe('findingsNotInBase', () => {
   }
 
   function architectureKeyOf(scope: DiffScope): (finding: Finding) => string {
-    return (finding) =>
-      matchFindingKey(finding, scope, SCOPE_ROOT, (message) =>
-        mapArchitectureRenameMessage(message, scope.renamedFrom),
-      );
+    return findingKeyBuilder(scope, SCOPE_ROOT, (message) =>
+      mapArchitectureRenameMessage(message, scope.renamedFrom),
+    );
   }
 
   it('maps architecture from -> to path segments through a git rename', () => {
@@ -293,7 +290,7 @@ describe('stableEslintMessage', () => {
     addedLines: new Map([['src/a.ts', new Set([1])]]),
     renamedFrom: new Map(),
   };
-  const keyOf = (finding: Finding): string => matchFindingKey(finding, scope, SCOPE_ROOT, stableEslintMessage);
+  const keyOf = findingKeyBuilder(scope, SCOPE_ROOT, stableEslintMessage);
   const eslintHit = (
     message: string,
     extras: { line?: number; messageId?: string; file?: string; rule?: string } = {},
@@ -478,8 +475,7 @@ describe('stableEslintMessage', () => {
           '    |     ^^^^^^^ Avoid calling setState() directly within an effect',
         ].join('\n');
 
-      const checkoutKeyOf = (finding: Finding): string =>
-        matchFindingKey(finding, scope, checkoutLink, stableEslintMessage);
+      const checkoutKeyOf = findingKeyBuilder(scope, checkoutLink, stableEslintMessage);
 
       // Current via symlinked checkout root (both raw and realpath) matches base via symlinked base root (both raw and realpath).
       for (const currentRoot of [checkoutLink, fs.realpathSync(checkoutLink)]) {

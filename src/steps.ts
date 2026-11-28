@@ -13,10 +13,10 @@ import {
 import {
   eslintMetricValue,
   filterFindingsToScope,
+  findingKeyBuilder,
   findingsNotInBase,
   identityMessage,
   mapArchitectureRenameMessage,
-  matchFindingKey,
   noMetric,
   partitionFindingsByScope,
   relativizeFindingPaths,
@@ -341,7 +341,7 @@ function relativizeEslintParsed(parsed: EslintParsed, baseRoot: string): EslintP
 }
 
 function eslintMatchKey(ctx: StepContext): (finding: Finding) => string {
-  return (finding) => matchFindingKey(finding, ctx.scope, ctx.cwd, stableEslintMessage);
+  return findingKeyBuilder(ctx.scope, ctx.cwd, stableEslintMessage);
 }
 
 /**
@@ -460,10 +460,9 @@ function newVsBaseCommandStep(
         return baseFindings;
       }
       const currentFindings = new Set(ran.findings);
-      const keyOf = (finding: Finding): string =>
-        matchFindingKey(finding, ctx.scope, ctx.cwd, (message) =>
-          currentFindings.has(finding) ? messageOf(message, ctx.scope.renamedFrom) : message,
-        );
+      const keyOf = findingKeyBuilder(ctx.scope, ctx.cwd, (message, finding) =>
+        currentFindings.has(finding) ? messageOf(message, ctx.scope.renamedFrom) : message,
+      );
       const findings = findingsNotInBase(ran.findings, baseFindings, keyOf, metricOf);
       if (findings.length === 0) {
         return { kind: 'pass', name };

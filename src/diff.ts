@@ -193,10 +193,10 @@ export function configFileInDiff(scope: DiffScope, configPath: string, repoRoot:
 function locatedRepoPath(
   filePath: string,
   repoRoot: string,
+  normalizedRoot: string = normalizePath(repoRoot),
 ): { readonly abs: string; readonly repoPath: string } | undefined {
-  const root = normalizePath(repoRoot);
   const abs = path.isAbsolute(filePath) ? normalizePath(filePath) : normalizePath(path.join(repoRoot, filePath));
-  const repoPath = relativeToRoot(abs, root);
+  const repoPath = relativeToRoot(abs, normalizedRoot);
   if (repoPath === undefined) {
     return undefined;
   }
@@ -434,9 +434,8 @@ function escapeRegExp(text: string): string {
  * first so `/private/var/...` matches before `/var/...`. Filesystem roots
  * (e.g. `/`) are omitted so unrelated absolute paths are never stripped.
  */
-function rootCandidates(root: string): string[] {
+function rootCandidates(root: string, real: string): string[] {
   const raw = path.resolve(root);
-  const real = normalizePath(raw);
   const candidates = real === raw ? [raw] : [real, path.join(normalizePath(path.dirname(raw)), path.basename(raw)), raw];
   const unique = new Set<string>();
   for (const candidate of candidates) {
@@ -447,8 +446,8 @@ function rootCandidates(root: string): string[] {
   return [...unique].sort((left, right) => right.length - left.length);
 }
 
-function buildRootMessagePattern(root: string): RegExp | undefined {
-  const candidates = rootCandidates(root);
+function buildRootMessagePattern(root: string, normalizedRoot: string): RegExp | undefined {
+  const candidates = rootCandidates(root, normalizedRoot);
   if (candidates.length === 0) {
     return undefined;
   }
@@ -474,9 +473,10 @@ function relativizeMessage(message: string, pattern: RegExp | undefined): string
 function relativizeFinding(
   finding: Finding,
   root: string,
-  messagePattern: RegExp | undefined = buildRootMessagePattern(root),
+  normalizedRoot: string,
+  messagePattern: RegExp | undefined,
 ): Finding {
-  const file = toRepoPath(finding.file, root) ?? finding.file;
+  const file = locatedRepoPath(finding.file, root, normalizedRoot)?.repoPath ?? finding.file;
   const message = relativizeMessage(finding.message, messagePattern);
   if (file === finding.file && message === finding.message) {
     return finding;
@@ -492,8 +492,9 @@ export function relativizeFindingPaths(findings: readonly Finding[], root: strin
   if (findings.length === 0) {
     return [];
   }
-  const messagePattern = buildRootMessagePattern(root);
-  return findings.map((finding) => relativizeFinding(finding, root, messagePattern));
+  const normalizedRoot = normalizePath(root);
+  const messagePattern = buildRootMessagePattern(root, normalizedRoot);
+  return findings.map((finding) => relativizeFinding(finding, root, normalizedRoot, messagePattern));
 }
 
 /** Leave the finding message unchanged (knip). */
@@ -594,22 +595,27 @@ export function mapArchitectureRenameMessage(
 }
 
 /**
- * Identity for new-vs-base comparison. Line is omitted so an unused helper
- * left on an unchanged line still matches the same symbol at HEAD. File and
- * embedded message paths under `repoRoot` are relativized through the same
- * helper as the merge-base copy, then file is mapped through git rename and
- * `messageOf` stabilizes tool wording (ESLint digit runs).
+ * Build a key function for new-vs-base comparison, precomputing the normalized
+ * `repoRoot` and embedded-path pattern once per scope instead of per finding.
+ * Line is omitted so an unused helper left on an unchanged line still matches
+ * the same symbol at HEAD. File and embedded message paths under `repoRoot`
+ * are relativized through the same helper as the merge-base copy, then file is
+ * mapped through git rename and `messageOf` stabilizes tool wording (ESLint
+ * digit runs) or architecture rename paths.
  */
-export function matchFindingKey(
-  finding: Finding,
+export function findingKeyBuilder(
   scope: DiffScope,
   repoRoot: string,
-  messageOf: (message: string) => string,
-): string {
-  const normalized = relativizeFinding(finding, repoRoot);
-  const file = scope.renamedFrom.get(normalized.file) ?? normalized.file;
-  const message = messageOf(normalized.message);
-  return `${finding.step}\0${file}\0${finding.rule}\0${finding.messageId ?? ''}\0${message}`;
+  messageOf: (message: string, finding: Finding) => string,
+): (finding: Finding) => string {
+  const normalizedRoot = normalizePath(repoRoot);
+  const messagePattern = buildRootMessagePattern(repoRoot, normalizedRoot);
+  return (finding) => {
+    const normalized = relativizeFinding(finding, repoRoot, normalizedRoot, messagePattern);
+    const file = scope.renamedFrom.get(normalized.file) ?? normalized.file;
+    const message = messageOf(normalized.message, finding);
+    return `${finding.step}\0${file}\0${finding.rule}\0${finding.messageId ?? ''}\0${message}`;
+  };
 }
 
 /**
