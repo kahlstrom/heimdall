@@ -7,6 +7,7 @@
  * grandchildren cannot outlive the step.
  */
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import { stripAnsi } from './ansi.js';
 import { DEFAULT_STEP_TIMEOUT_MS, errorMessage, type CommandResult } from './types.js';
 
 const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
@@ -189,8 +190,8 @@ export const runCommand: RunCommandFn = (command, cwd, env, options) => {
     ): CommandResult => ({
       exitCode: code,
       signal,
-      stdout: Buffer.concat(stdoutChunks).toString('utf8'),
-      stderr: Buffer.concat(stderrChunks).toString('utf8'),
+      stdout: stripAnsi(Buffer.concat(stdoutChunks).toString('utf8')),
+      stderr: stripAnsi(Buffer.concat(stderrChunks).toString('utf8')),
       spawnError,
       timedOut,
     });

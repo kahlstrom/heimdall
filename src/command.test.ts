@@ -188,6 +188,18 @@ describe('runCommand', () => {
     expect(result.spawnError).toBeUndefined();
   });
 
+  it('strips ANSI and OSC escape sequences from captured stdout and stderr even with FORCE_COLOR set', async () => {
+    const command = nodeCommand(
+      "const e = String.fromCharCode(27); const bel = String.fromCharCode(7); process.stdout.write(e + '[31m' + e + '[1mFAIL' + e + '[22m' + e + '[39m ' + e + ']8;;https://example.com' + bel + 'src/a.ts' + e + ']8;;' + bel); process.stderr.write(e + '[33mwarn' + e + '[0m: bad config');",
+    );
+    const result = await runCommand(command, process.cwd(), { ...process.env, FORCE_COLOR: '1' });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('FAIL src/a.ts');
+    expect(result.stderr).toBe('warn: bad config');
+    expect(result.stdout).not.toContain('\x1b');
+    expect(result.stderr).not.toContain('\x1b');
+  });
+
   it('reports a missing binary as a spawn or shell-not-found error', async () => {
     const command = 'gate-definitely-missing-binary-xyz';
     const result = await runCommand(command, process.cwd(), process.env);

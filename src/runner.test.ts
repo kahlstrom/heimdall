@@ -765,6 +765,48 @@ describe('runGate exit codes', () => {
     });
   });
 
+  it('strips ANSI escapes from real command output, snippets, and the report even with FORCE_COLOR set', async () => {
+    const coloredErrorCmd = nodeCommand(
+      "const e = String.fromCharCode(27); process.stdout.write(e + '[31m' + e + '[1mCRASH' + e + '[0m: unparseable stdout\\n'); process.stderr.write(e + '[33m' + (process.env.FORCE_COLOR === '1' ? 'forced-color-stderr' : 'plain-stderr') + e + '[0m\\n'); process.exit(2);",
+    );
+    await seededRepo(async (repo) => {
+      await withProcessEnv({ FORCE_COLOR: '1' }, async () => {
+        const outcome = await runGate({ cwd: repo });
+        expect(outcome.kind).toBe('error');
+        expect(outcome.exitCode).toBe(2);
+        if (outcome.kind === 'error') {
+          expect(outcome.reason).toContain('CRASH: unparseable stdout');
+          expect(outcome.reason).toContain('forced-color-stderr');
+          expect(outcome.reason).not.toContain('\x1b');
+        }
+        const report = formatReport(outcome);
+        expect(report).toContain('CRASH: unparseable stdout');
+        expect(report).toContain('forced-color-stderr');
+        expect(report).not.toContain('\x1b');
+      });
+    }, {
+      steps: { tests: { command: coloredErrorCmd } },
+    });
+  });
+
+  it('parses JSON step output containing ANSI escapes when FORCE_COLOR is set', async () => {
+    const coloredJsonCmd = nodeCommand(
+      "const e = String.fromCharCode(27); const payload = JSON.stringify([{ filePath: 'src/new.ts', messages: [{ line: 1, ruleId: 'no-unused-vars', message: 'unused value', severity: 2 }] }]); process.stdout.write(payload.replace('\"unused value\"', '\"' + e + '[31munused value' + e + '[0m\"')); process.exit(1);",
+    );
+    await seededRepo(async (repo) => {
+      await withProcessEnv({ FORCE_COLOR: '1' }, async () => {
+        const outcome = await runGate({ cwd: repo });
+        expect(outcome.kind).toBe('red');
+        expect(outcome.exitCode).toBe(1);
+        const report = formatReport(outcome);
+        expect(report).toContain('src/new.ts:1 [no-unused-vars] unused value');
+        expect(report).not.toContain('\x1b');
+      });
+    }, {
+      steps: { eslint: { command: coloredJsonCmd } },
+    });
+  });
+
   it('loads in-repo gate.config.json as a deprecated fallback with a warning', async () => {
     await withTempRepo(async (repo) => {
       writeRepoFile(repo, 'src/ok.ts', 'export const n = 1;\n');

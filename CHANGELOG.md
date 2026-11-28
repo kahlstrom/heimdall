@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   running, exit 2 (`GATE ERROR`) with both commit shas and a rerun message
   while keeping the starting sha in `outcome.headSha` and the summary's
   `head:` line.
+- Strip ANSI/VT escape sequences from all captured command `stdout` and
+  `stderr` in `runCommand` so color forced by `FORCE_COLOR` or tools that
+  ignore `NO_COLOR` never reaches JSON parsers, GATE ERROR snippets, or the
+  final report.
 
 ## [0.3.0] - 2026-11-27
 
