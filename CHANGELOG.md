@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Normalize embedded absolute paths under the checkout root or temporary
+  merge-base root (raw and realpath, including `/var` vs `/private/var`
+  aliases) in finding `message` as well as `file` through one shared helper
+  when matching against the merge-base baseline, so pre-existing findings
+  whose message includes an absolute path (such as React Compiler code frames)
+  are not counted as new.
 - Classify OOM and native child-command crashes (`SIGABRT`, `SIGSEGV`,
   `SIGBUS`, `SIGILL`, `SIGTRAP`, exits `134`/`139`/`133`, and V8 OOM stderr
   messages; excluding `SIGKILL`/`137` and still letting timeout and abort win)

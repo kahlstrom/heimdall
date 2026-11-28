@@ -424,28 +424,76 @@ export function filterFindingsToScope(
   return ok([...partitioned.value.inScope]);
 }
 
-/**
- * Rewrite absolute paths under `root` to repo-relative paths. Relative paths
- * and paths outside `root` are left as reported. Call this while `root` still
- * exists (the merge-base copy).
- */
-export function relativizeFindingFiles(findings: readonly Finding[], root: string): Finding[] {
-  return findings.map((finding) => {
-    const rel = toRepoPath(finding.file, root);
-    if (rel === undefined || rel === finding.file) {
-      return finding;
-    }
-    return { ...finding, file: rel };
-  });
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /**
- * Repo-relative path, then the pre-rename path when this file was moved
- * (`renamedFrom` is new → old). Base findings already sit on the old path.
+ * Candidate absolute forms of `root` (full realpath, parent realpath for a
+ * symlinked leaf, and raw resolved path), deduplicated and ordered longest
+ * first so `/private/var/...` matches before `/var/...`. Filesystem roots
+ * (e.g. `/`) are omitted so unrelated absolute paths are never stripped.
  */
-export function matchFindingFile(finding: Finding, scope: DiffScope, repoRoot: string): string {
-  const rel = toRepoPath(finding.file, repoRoot) ?? finding.file;
-  return scope.renamedFrom.get(rel) ?? rel;
+function rootCandidates(root: string): string[] {
+  const raw = path.resolve(root);
+  const real = normalizePath(raw);
+  const candidates = real === raw ? [raw] : [real, path.join(normalizePath(path.dirname(raw)), path.basename(raw)), raw];
+  const unique = new Set<string>();
+  for (const candidate of candidates) {
+    if (candidate !== path.parse(candidate).root) {
+      unique.add(candidate);
+    }
+  }
+  return [...unique].sort((left, right) => right.length - left.length);
+}
+
+function buildRootMessagePattern(root: string): RegExp | undefined {
+  const candidates = rootCandidates(root);
+  if (candidates.length === 0) {
+    return undefined;
+  }
+  const rootAlt = candidates.map(escapeRegExp).join('|');
+  const sep = escapeRegExp(path.sep);
+  return new RegExp(
+    `(?<=^|[\\s'"\`([{:;,=<>|]|file:\\/\\/)(?:${rootAlt})(?:(${sep}+)(?![\\s'"\`\\])}:;,=<>|]|$)|${sep}*(?=$|[\\s'"\`\\])}:;,=<>|]|\\.(?=$|\\s)))`,
+    'g',
+  );
+}
+
+function relativizeMessage(message: string, pattern: RegExp | undefined): string {
+  if (message === '' || pattern === undefined) {
+    return message;
+  }
+  return message.replace(pattern, (match, subpathSep: string | undefined) => (subpathSep !== undefined ? '' : '.'));
+}
+
+/**
+ * Rewrite absolute paths under `root` to repo-relative paths in both `file`
+ * and `message`. Relative paths and paths outside `root` are left as reported.
+ */
+function relativizeFinding(
+  finding: Finding,
+  root: string,
+  messagePattern: RegExp | undefined = buildRootMessagePattern(root),
+): Finding {
+  const file = toRepoPath(finding.file, root) ?? finding.file;
+  const message = relativizeMessage(finding.message, messagePattern);
+  if (file === finding.file && message === finding.message) {
+    return finding;
+  }
+  return { ...finding, file, message };
+}
+
+/**
+ * Rewrite absolute paths under `root` to repo-relative paths in both `file`
+ * and `message`. Call this while `root` still exists (the merge-base copy).
+ */
+export function relativizeFindingPaths(findings: readonly Finding[], root: string): Finding[] {
+  if (findings.length === 0) {
+    return [];
+  }
+  const messagePattern = buildRootMessagePattern(root);
+  return findings.map((finding) => relativizeFinding(finding, root, messagePattern));
 }
 
 /** Leave the finding message unchanged (knip). */
@@ -547,9 +595,10 @@ export function mapArchitectureRenameMessage(
 
 /**
  * Identity for new-vs-base comparison. Line is omitted so an unused helper
- * left on an unchanged line still matches the same symbol at HEAD. File is
- * repo-relative and mapped through git rename. `messageOf` stabilizes tool
- * wording (ESLint digit runs).
+ * left on an unchanged line still matches the same symbol at HEAD. File and
+ * embedded message paths under `repoRoot` are relativized through the same
+ * helper as the merge-base copy, then file is mapped through git rename and
+ * `messageOf` stabilizes tool wording (ESLint digit runs).
  */
 export function matchFindingKey(
   finding: Finding,
@@ -557,8 +606,9 @@ export function matchFindingKey(
   repoRoot: string,
   messageOf: (message: string) => string,
 ): string {
-  const file = matchFindingFile(finding, scope, repoRoot);
-  const message = messageOf(finding.message);
+  const normalized = relativizeFinding(finding, repoRoot);
+  const file = scope.renamedFrom.get(normalized.file) ?? normalized.file;
+  const message = messageOf(normalized.message);
   return `${finding.step}\0${file}\0${finding.rule}\0${finding.messageId ?? ''}\0${message}`;
 }
 

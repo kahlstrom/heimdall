@@ -17,7 +17,7 @@ import {
   typecheckStep,
   type StepContext,
 } from './steps.js';
-import { loadDiffScope, relativizeFindingFiles } from './diff.js';
+import { loadDiffScope, relativizeFindingPaths } from './diff.js';
 import { resolveBaseRef } from './git.js';
 import { formatFinding } from './report.js';
 import { err, ok, type DiffScope, type Finding, type GateConfig, type Result } from './types.js';
@@ -876,6 +876,108 @@ describe('eslintStep', () => {
         }),
       );
       expect(step.kind).toBe('pass');
+    });
+  });
+
+  it('passes a pre-existing finding whose message embeds the absolute root path (raw and realpath)', async () => {
+    await withEslintRepo(async ({ repo, tmpDir, scope }) => {
+      const codeFrame = (root: string): string =>
+        [
+          'Error: Calling setState synchronously within an effect can trigger cascading renders',
+          '',
+          `${path.join(root, 'src/old.ts')}:1:1`,
+          '> 1 | export const old = 1;',
+          '    | ^^^^^^^^^^^^^^^^^^^^^',
+        ].join('\n');
+
+      for (const useRealpathInBase of [false, true]) {
+        const step = await eslintStep.run(
+          ctx({
+            cwd: repo,
+            tmpDir,
+            scope,
+            config: cfg({ steps: { eslint: { command: 'npx eslint -f json' } } }),
+            runCommand: async (command, cwd) => {
+              const embeddedRoot = cwd.includes('eslint-base') && useRealpathInBase ? fs.realpathSync(cwd) : cwd;
+              return result({
+                exitCode: 1,
+                stdout: JSON.stringify([
+                  {
+                    filePath: path.join(embeddedRoot, 'src/old.ts'),
+                    messages: [
+                      {
+                        line: 1,
+                        ruleId: 'react-hooks/set-state-in-effect',
+                        message: codeFrame(embeddedRoot),
+                        severity: 2,
+                      },
+                    ],
+                  },
+                ]),
+              });
+            },
+          }),
+        );
+        expect(step.kind).toBe('pass');
+      }
+    });
+  });
+
+  it('fails when a finding embedding an absolute path has a new message, rule, or file', async () => {
+    await withEslintRepo(async ({ repo, tmpDir, scope }) => {
+      const reportFor = (root: string, relFile: string, ruleId: string, body: string): string =>
+        JSON.stringify([
+          {
+            filePath: path.join(root, relFile),
+            messages: [
+              {
+                line: 1,
+                ruleId,
+                message: `${body}\n\n${path.join(root, relFile)}:1:1`,
+                severity: 2,
+              },
+            ],
+          },
+        ]);
+
+      const cases = [
+        { file: 'src/old.ts', rule: 'react-hooks/set-state-in-effect', body: 'Error: new problem' },
+        { file: 'src/old.ts', rule: 'react-hooks/refs', body: 'Error: pre-existing problem' },
+        { file: 'src/a.ts', rule: 'react-hooks/set-state-in-effect', body: 'Error: pre-existing problem' },
+      ];
+
+      for (const variant of cases) {
+        const step = await eslintStep.run(
+          ctx({
+            cwd: repo,
+            tmpDir,
+            scope,
+            config: cfg({ steps: { eslint: { command: 'npx eslint -f json' } } }),
+            runCommand: async (command, cwd) => {
+              if (cwd.includes('eslint-base')) {
+                return result({
+                  exitCode: 1,
+                  stdout: reportFor(
+                    fs.realpathSync(cwd),
+                    'src/old.ts',
+                    'react-hooks/set-state-in-effect',
+                    'Error: pre-existing problem',
+                  ),
+                });
+              }
+              return result({
+                exitCode: 1,
+                stdout: reportFor(cwd, variant.file, variant.rule, variant.body),
+              });
+            },
+          }),
+        );
+        expect(step.kind).toBe('fail');
+        if (step.kind === 'fail') {
+          expect(step.findings).toHaveLength(1);
+          expect(step.findings[0]?.rule).toBe(variant.rule);
+        }
+      }
     });
   });
 });
@@ -2444,7 +2546,7 @@ describe('findingsAtMergeBase', () => {
           'jscpd',
           'fake-jscpd',
           parseFakeTsv,
-          relativizeFindingFiles,
+          relativizeFindingPaths,
         );
         expect(parsed).toEqual([{ step: 'jscpd', file: 'src/a.ts', line: 1, rule: 'duplicate', message: 'clone' }]);
         expect(fs.existsSync(dest)).toBe(false);
@@ -2472,7 +2574,7 @@ describe('findingsAtMergeBase', () => {
           'jscpd',
           'fake-jscpd',
           parseFakeTsv,
-          relativizeFindingFiles,
+          relativizeFindingPaths,
         );
         expect(Array.isArray(step)).toBe(false);
         if (!Array.isArray(step)) {
@@ -2506,7 +2608,7 @@ describe('findingsAtMergeBase', () => {
           'jscpd',
           'fake-jscpd',
           parseFakeTsv,
-          relativizeFindingFiles,
+          relativizeFindingPaths,
         );
         expect(Array.isArray(step)).toBe(false);
         if (!Array.isArray(step)) {
@@ -2593,7 +2695,7 @@ describe('findingsAtMergeBase', () => {
           'jscpd',
           'fake-jscpd',
           parseFakeTsv,
-          relativizeFindingFiles,
+          relativizeFindingPaths,
         );
         expect(sawBaseCopy).toBe(true);
         expect(parsed).toEqual([{ step: 'jscpd', file: 'src/a.ts', line: 1, rule: 'duplicate', message: 'clone' }]);
@@ -2931,7 +3033,7 @@ describe('crash classification across steps', () => {
           'eslint',
           'npx eslint -f json',
           () => err('should not parse'),
-          relativizeFindingFiles,
+          relativizeFindingPaths,
         );
         expect('kind' in res && res.kind === 'error').toBe(true);
         if ('kind' in res && res.kind === 'error') {

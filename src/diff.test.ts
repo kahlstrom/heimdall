@@ -14,6 +14,7 @@ import {
   matchFindingKey,
   noMetric,
   parseChangedNewLines,
+  relativizeFindingPaths,
   stableEslintMessage,
   toRepoPath,
 } from './diff.js';
@@ -451,6 +452,169 @@ describe('stableEslintMessage', () => {
       eslintHit("'x' is already declared in the upper scope on line 4 column 10.", { line: 4, messageId: 'noShadow' }),
     ];
     expect(findingsNotInBase(current, base, keyOf, eslintMetricValue)).toEqual([current[1]]);
+  });
+
+  it('matches a message embedding the checkout root against a merge-base message with the baseline root', () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-msg-path-'));
+    try {
+      const checkoutReal = path.join(parent, 'checkout-real');
+      const checkoutLink = path.join(parent, 'checkout-link');
+      const baseReal = path.join(parent, 'base-real');
+      const baseLink = path.join(parent, 'base-link');
+      fs.mkdirSync(path.join(checkoutReal, 'src'), { recursive: true });
+      fs.mkdirSync(path.join(baseReal, 'src'), { recursive: true });
+      fs.writeFileSync(path.join(checkoutReal, 'src/Map.tsx'), 'export const x = 1;\n');
+      fs.writeFileSync(path.join(baseReal, 'src/Map.tsx'), 'export const x = 1;\n');
+      fs.symlinkSync(checkoutReal, checkoutLink);
+      fs.symlinkSync(baseReal, baseLink);
+
+      const frame = (root: string, line: number): string =>
+        [
+          'Error: Calling setState synchronously within an effect can trigger cascading renders',
+          '',
+          `${path.join(root, 'src/Map.tsx')}:${line}:5`,
+          `  ${line - 1} |   useEffect(() => {`,
+          `> ${line} |     setOpen(true);`,
+          '    |     ^^^^^^^ Avoid calling setState() directly within an effect',
+        ].join('\n');
+
+      const checkoutKeyOf = (finding: Finding): string =>
+        matchFindingKey(finding, scope, checkoutLink, stableEslintMessage);
+
+      // Current via symlinked checkout root (both raw and realpath) matches base via symlinked base root (both raw and realpath).
+      for (const currentRoot of [checkoutLink, fs.realpathSync(checkoutLink)]) {
+        for (const baseRoot of [baseLink, fs.realpathSync(baseLink)]) {
+          const current = [
+            eslintHit(frame(currentRoot, 42), {
+              file: path.join(currentRoot, 'src/Map.tsx'),
+              line: 42,
+              rule: 'react-hooks/set-state-in-effect',
+            }),
+          ];
+          const base = relativizeFindingPaths(
+            [
+              eslintHit(frame(baseRoot, 40), {
+                file: path.join(baseRoot, 'src/Map.tsx'),
+                line: 40,
+                rule: 'react-hooks/set-state-in-effect',
+              }),
+            ],
+            baseLink,
+          );
+          expect(findingsNotInBase(current, base, checkoutKeyOf, eslintMetricValue)).toEqual([]);
+        }
+      }
+
+      // Truly new message, different rule, or different file still count as new.
+      const baseRel = relativizeFindingPaths(
+        [
+          eslintHit(frame(fs.realpathSync(baseLink), 40), {
+            file: path.join(baseLink, 'src/Map.tsx'),
+            line: 40,
+            rule: 'react-hooks/set-state-in-effect',
+          }),
+        ],
+        baseLink,
+      );
+      const differentMessage = [
+        eslintHit(frame(checkoutLink, 42).replace('setOpen(true)', 'setClosed(true)'), {
+          file: path.join(checkoutLink, 'src/Map.tsx'),
+          line: 42,
+          rule: 'react-hooks/set-state-in-effect',
+        }),
+      ];
+      const differentRule = [
+        eslintHit(frame(checkoutLink, 42), {
+          file: path.join(checkoutLink, 'src/Map.tsx'),
+          line: 42,
+          rule: 'react-hooks/refs',
+        }),
+      ];
+      const differentFile = [
+        eslintHit(frame(checkoutLink, 42), {
+          file: path.join(checkoutLink, 'src/Other.tsx'),
+          line: 42,
+          rule: 'react-hooks/set-state-in-effect',
+        }),
+      ];
+      expect(findingsNotInBase(differentMessage, baseRel, checkoutKeyOf, eslintMetricValue)).toEqual(differentMessage);
+      expect(findingsNotInBase(differentRule, baseRel, checkoutKeyOf, eslintMetricValue)).toEqual(differentRule);
+      expect(findingsNotInBase(differentFile, baseRel, checkoutKeyOf, eslintMetricValue)).toEqual(differentFile);
+    } finally {
+      fs.rmSync(parent, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('relativizeFindingPaths', () => {
+  const hit = (file: string, message: string): Finding => ({
+    step: 'eslint',
+    file,
+    line: 1,
+    rule: 'x',
+    message,
+  });
+
+  it('rewrites absolute paths under root in both file and message', () => {
+    const [rel] = relativizeFindingPaths(
+      [
+        hit(
+          '/repo/src/a.ts',
+          "See '/repo/src/a.ts:10:2', (/repo/src/b.ts:3:1), file:///repo/src/c.ts, and root '/repo' or '/repo/'",
+        ),
+      ],
+      '/repo',
+    );
+    expect(rel).toEqual(
+      hit('src/a.ts', "See 'src/a.ts:10:2', (src/b.ts:3:1), file://src/c.ts, and root '.' or '.'"),
+    );
+  });
+
+  it('leaves sibling directories, suffix matches, and outside paths untouched', () => {
+    const original = hit(
+      '/outside/a.ts',
+      'Paths: /repo-other/src/a.ts, /repo.bak/src/a.ts, /other/repo/src/a.ts, /outside/a.ts',
+    );
+    const [rel] = relativizeFindingPaths([original], '/repo');
+    expect(rel).toBe(original);
+  });
+
+  it('handles regex metacharacters in the root path and ignores filesystem root', () => {
+    const weirdRoot = '/tmp/my (repo) [1]+$a.b';
+    const [rel] = relativizeFindingPaths(
+      [hit(`${weirdRoot}/src/a.ts`, `Error at ${weirdRoot}/src/a.ts:4:1`)],
+      weirdRoot,
+    );
+    expect(rel).toEqual(hit('src/a.ts', 'Error at src/a.ts:4:1'));
+
+    const untouched = hit('src/a.ts', 'Error at /src/a.ts:4:1');
+    expect(relativizeFindingPaths([untouched], path.parse(process.cwd()).root)).toEqual([untouched]);
+  });
+
+  it('rewrites both raw and realpath aliases without corrupting /private/var with /var', () => {
+    const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-rel-alias-'));
+    try {
+      const real = path.join(parent, 'real');
+      const link = path.join(parent, 'link');
+      fs.mkdirSync(path.join(real, 'src'), { recursive: true });
+      fs.writeFileSync(path.join(real, 'src/a.ts'), 'export const a = 1;\n');
+      fs.symlinkSync(real, link);
+
+      const resolvedReal = fs.realpathSync(link);
+      const rawLink = path.resolve(link);
+      const [rel] = relativizeFindingPaths(
+        [
+          hit(
+            path.join(resolvedReal, 'src/a.ts'),
+            `Real: ${path.join(resolvedReal, 'src/a.ts')}:1:1\nRaw: ${path.join(rawLink, 'src/a.ts')}:2:2`,
+          ),
+        ],
+        rawLink,
+      );
+      expect(rel).toEqual(hit('src/a.ts', 'Real: src/a.ts:1:1\nRaw: src/a.ts:2:2'));
+    } finally {
+      fs.rmSync(parent, { recursive: true, force: true });
+    }
   });
 });
 

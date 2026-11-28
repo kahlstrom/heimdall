@@ -19,7 +19,7 @@ import {
   matchFindingKey,
   noMetric,
   partitionFindingsByScope,
-  relativizeFindingFiles,
+  relativizeFindingPaths,
   stableEslintMessage,
 } from './diff.js';
 import { materializeCommit } from './git.js';
@@ -335,8 +335,8 @@ export const testsStep: GateStep = {
 
 function relativizeEslintParsed(parsed: EslintParsed, baseRoot: string): EslintParsed {
   return {
-    errors: relativizeFindingFiles(parsed.errors, baseRoot),
-    warnings: relativizeFindingFiles(parsed.warnings, baseRoot),
+    errors: relativizeFindingPaths(parsed.errors, baseRoot),
+    warnings: relativizeFindingPaths(parsed.warnings, baseRoot),
   };
 }
 
@@ -455,7 +455,7 @@ function newVsBaseCommandStep(
         return toolFailedWithoutFindings(name, ran.command, ran.result);
       }
 
-      const baseFindings = await findingsAtMergeBase(ctx, name, ran.command, parse, relativizeFindingFiles);
+      const baseFindings = await findingsAtMergeBase(ctx, name, ran.command, parse, relativizeFindingPaths);
       if (isStepResult(baseFindings)) {
         return baseFindings;
       }
