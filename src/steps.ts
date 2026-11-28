@@ -3,7 +3,13 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { classifyCommandFailure, combinedOutput, type RunCommandFn } from './command.js';
+import {
+  classifyCommandFailure,
+  combinedOutput,
+  commandFailureStep,
+  type ClassifyCommandOptions,
+  type RunCommandFn,
+} from './command.js';
 import {
   eslintMetricValue,
   filterFindingsToScope,
@@ -40,6 +46,7 @@ import {
   type DiffScope,
   type Finding,
   type GateConfig,
+  type NodeHeap,
   type Result,
   type StepName,
   type StepResult,
@@ -53,6 +60,7 @@ export type StepContext = {
   readonly runCommand: RunCommandFn;
   readonly env: NodeJS.ProcessEnv;
   readonly abortSignal?: AbortSignal;
+  readonly nodeHeap?: NodeHeap;
 };
 
 export type GateStep = {
@@ -81,6 +89,14 @@ function runCommandOptions(ctx: StepContext, timeoutMs: number): { timeoutMs: nu
   return { timeoutMs };
 }
 
+function classifyOptions(ctx: StepContext): ClassifyCommandOptions {
+  return {
+    cwd: ctx.cwd,
+    ...(ctx.nodeHeap !== undefined ? { nodeHeap: ctx.nodeHeap } : {}),
+    ...(ctx.abortSignal !== undefined ? { abortSignal: ctx.abortSignal } : {}),
+  };
+}
+
 async function runConfigured(
   ctx: StepContext,
   name: Exclude<StepName, 'line-checks'>,
@@ -91,9 +107,9 @@ async function runConfigured(
   }
   const timeoutMs = stepTimeoutMs(ctx.config, name);
   const result = await ctx.runCommand(command, ctx.cwd, ctx.env, runCommandOptions(ctx, timeoutMs));
-  const crash = classifyCommandFailure(name, command, result, timeoutMs, ctx.abortSignal);
-  if (crash) {
-    return { kind: 'error', name, reason: crash };
+  const failure = classifyCommandFailure(name, command, result, timeoutMs, classifyOptions(ctx));
+  if (failure) {
+    return commandFailureStep(name, failure);
   }
   return { command, result };
 }
@@ -503,9 +519,9 @@ export async function findingsAtMergeBase<T>(
       return { kind: 'error', name: stepName, reason: linked.error };
     }
     const baseRan = await ctx.runCommand(command, dest, ctx.env, runCommandOptions(ctx, timeoutMs));
-    const crash = classifyCommandFailure(stepName, command, baseRan, timeoutMs, ctx.abortSignal);
-    if (crash) {
-      return { kind: 'error', name: stepName, reason: `${stepName} baseline: ${crash}` };
+    const failure = classifyCommandFailure(stepName, command, baseRan, timeoutMs, classifyOptions(ctx));
+    if (failure) {
+      return commandFailureStep(stepName, failure, `${stepName} baseline`);
     }
     const parsed = parseOrError(stepName, parse(baseRan.stdout), baseRan);
     if (isStepResult(parsed)) {

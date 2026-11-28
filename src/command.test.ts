@@ -87,7 +87,7 @@ describe('commandFailureReason', () => {
 
 describe('classifyCommandFailure', () => {
   it('names the step and timeout budget when timedOut', () => {
-    const reason = classifyCommandFailure(
+    const failure = classifyCommandFailure(
       'tests',
       'sleep 10',
       {
@@ -100,13 +100,13 @@ describe('classifyCommandFailure', () => {
       },
       200,
     );
-    expect(reason).toBe('tests timed out after 200ms');
+    expect(failure).toEqual({ kind: 'error', reason: 'tests timed out after 200ms' });
   });
 
   it('names the interrupting signal', () => {
     const abort = new AbortController();
     abort.abort('SIGINT');
-    const reason = classifyCommandFailure(
+    const failure = classifyCommandFailure(
       'tests',
       'sleep 10',
       {
@@ -118,13 +118,14 @@ describe('classifyCommandFailure', () => {
         timedOut: false,
       },
       300_000,
-      abort.signal,
+      { abortSignal: abort.signal },
     );
-    expect(reason).toMatch(/heimdall interrupted \(SIGINT\)/);
+    expect(failure?.kind).toBe('error');
+    expect(failure?.reason).toMatch(/heimdall interrupted \(SIGINT\)/);
   });
 
   it('names the step and config key when the command is missing (exit 127)', () => {
-    const reason = classifyCommandFailure(
+    const failure = classifyCommandFailure(
       'knip',
       'missing-bin',
       {
@@ -137,13 +138,14 @@ describe('classifyCommandFailure', () => {
       },
       300_000,
     );
-    expect(reason).toBe(
-      'knip: command not found (exit 127); install the tool or fix steps.knip.command',
-    );
+    expect(failure).toEqual({
+      kind: 'error',
+      reason: 'knip: command not found (exit 127); install the tool or fix steps.knip.command',
+    });
   });
 
   it('names the top-level setup key and failing command, not steps.setup.command', () => {
-    const reason = classifyCommandFailure(
+    const failure = classifyCommandFailure(
       'setup',
       'missing-setup-bin',
       {
@@ -155,13 +157,256 @@ describe('classifyCommandFailure', () => {
         timedOut: false,
       },
       300_000,
-      undefined,
-      'setup[0] "missing-setup-bin"',
+      { commandKey: 'setup[0] "missing-setup-bin"' },
     );
-    expect(reason).toBe(
-      'setup: command not found (exit 127); install the tool or fix setup[0] "missing-setup-bin"',
+    expect(failure).toEqual({
+      kind: 'error',
+      reason: 'setup: command not found (exit 127); install the tool or fix setup[0] "missing-setup-bin"',
+    });
+    expect(failure?.reason).not.toMatch(/steps\.setup/);
+  });
+
+  it('classifies native crash signals with structured crash details and default heap hint', () => {
+    for (const signal of ['SIGABRT', 'SIGSEGV', 'SIGBUS', 'SIGILL', 'SIGTRAP'] as const) {
+      const failure = classifyCommandFailure(
+        'eslint',
+        'npx eslint -f json',
+        {
+          exitCode: null,
+          signal,
+          stdout: '',
+          stderr: '',
+          spawnError: undefined,
+          timedOut: false,
+        },
+        300_000,
+        { cwd: '/tmp/my-repo', nodeHeap: { kind: 'default' } },
+      );
+      expect(failure).toEqual({
+        kind: 'crash',
+        reason: `eslint crashed (${signal}); try --node-heap 8192`,
+        crash: {
+          signal,
+          exitCode: null,
+          heapMb: null,
+          nodeVersion: process.version,
+          repo: 'my-repo',
+        },
+      });
+    }
+  });
+
+  it('classifies shell crash exit codes 134, 139, and 133 with structured crash details', () => {
+    const cases: ReadonlyArray<readonly [number, NodeJS.Signals]> = [
+      [134, 'SIGABRT'],
+      [139, 'SIGSEGV'],
+      [133, 'SIGTRAP'],
+    ];
+    for (const [exitCode, expectedSignal] of cases) {
+      const failure = classifyCommandFailure(
+        'eslint',
+        'npx eslint -f json',
+        {
+          exitCode,
+          signal: null,
+          stdout: '',
+          stderr: '',
+          spawnError: undefined,
+          timedOut: false,
+        },
+        300_000,
+        { cwd: '/tmp/sample-app', nodeHeap: { kind: 'default' } },
+      );
+      expect(failure).toEqual({
+        kind: 'crash',
+        reason: `eslint crashed (exit ${exitCode} / ${expectedSignal}); try --node-heap 8192`,
+        crash: {
+          signal: null,
+          exitCode,
+          heapMb: null,
+          nodeVersion: process.version,
+          repo: 'sample-app',
+        },
+      });
+    }
+  });
+
+  it('classifies V8 OOM stderr markers on non-zero exit as a crash, but not on exit 0', () => {
+    for (const marker of [
+      'JavaScript heap out of memory',
+      'FATAL ERROR: Reached heap limit',
+      'Allocation failed',
+    ]) {
+      const failure = classifyCommandFailure(
+        'typecheck',
+        'npx tsc --noEmit',
+        {
+          exitCode: 1,
+          signal: null,
+          stdout: '',
+          stderr: `... ${marker} ...`,
+          spawnError: undefined,
+          timedOut: false,
+        },
+        300_000,
+        { cwd: '/tmp/sample-app', nodeHeap: { kind: 'default' } },
+      );
+      expect(failure).toEqual({
+        kind: 'crash',
+        reason: 'typecheck crashed (OOM, exit 1); try --node-heap 8192',
+        crash: {
+          signal: null,
+          exitCode: 1,
+          heapMb: null,
+          nodeVersion: process.version,
+          repo: 'sample-app',
+        },
+      });
+
+      const okRun = classifyCommandFailure(
+        'tests',
+        'npx vitest run',
+        {
+          exitCode: 0,
+          signal: null,
+          stdout: '',
+          stderr: marker,
+          spawnError: undefined,
+          timedOut: false,
+        },
+        300_000,
+      );
+      expect(okRun).toBeUndefined();
+    }
+  });
+
+  it('does not treat SIGKILL or exit 137 as a crash', () => {
+    const killed = classifyCommandFailure(
+      'eslint',
+      'npx eslint -f json',
+      {
+        exitCode: null,
+        signal: 'SIGKILL',
+        stdout: '',
+        stderr: 'JavaScript heap out of memory',
+        spawnError: undefined,
+        timedOut: false,
+      },
+      300_000,
     );
-    expect(reason).not.toMatch(/steps\.setup/);
+    expect(killed?.kind).toBe('error');
+    expect(killed?.reason).toMatch(/SIGKILL/);
+
+    const exit137 = classifyCommandFailure(
+      'eslint',
+      'npx eslint -f json',
+      {
+        exitCode: 137,
+        signal: null,
+        stdout: '',
+        stderr: 'JavaScript heap out of memory',
+        spawnError: undefined,
+        timedOut: false,
+      },
+      300_000,
+    );
+    expect(exit137).toBeUndefined();
+  });
+
+  it('lets timeout and abort win over crash signals, exit 134, and OOM stderr', () => {
+    const timedOut = classifyCommandFailure(
+      'eslint',
+      'npx eslint -f json',
+      {
+        exitCode: null,
+        signal: 'SIGABRT',
+        stdout: '',
+        stderr: 'FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory',
+        spawnError: undefined,
+        timedOut: true,
+      },
+      500,
+    );
+    expect(timedOut).toEqual({ kind: 'error', reason: 'eslint timed out after 500ms' });
+
+    const abort = new AbortController();
+    abort.abort('SIGTERM');
+    const aborted = classifyCommandFailure(
+      'eslint',
+      'npx eslint -f json',
+      {
+        exitCode: 134,
+        signal: null,
+        stdout: '',
+        stderr: 'JavaScript heap out of memory',
+        spawnError: undefined,
+        timedOut: false,
+      },
+      300_000,
+      { abortSignal: abort.signal },
+    );
+    expect(aborted).toEqual({ kind: 'error', reason: 'heimdall interrupted (SIGTERM)' });
+  });
+
+  it('reports the active heap instead of suggesting --node-heap 8192 when heap is already configured', () => {
+    const baseResult = {
+      exitCode: 134,
+      signal: null,
+      stdout: '',
+      stderr: 'FATAL ERROR: Reached heap limit',
+      spawnError: undefined,
+      timedOut: false,
+    } as const;
+
+    const fromCli = classifyCommandFailure('eslint', 'npx eslint -f json', baseResult, 300_000, {
+      cwd: '/tmp/app',
+      nodeHeap: { kind: 'configured', mb: 8192, source: 'cli' },
+    });
+    expect(fromCli?.kind).toBe('crash');
+    if (fromCli?.kind === 'crash') {
+      expect(fromCli.reason).toBe('eslint crashed (OOM, exit 134 / SIGABRT); node-heap was 8192 MB (from --node-heap)');
+      expect(fromCli.reason).not.toContain('try --node-heap');
+      expect(fromCli.crash.heapMb).toBe(8192);
+    }
+
+    const fromEnv = classifyCommandFailure('eslint', 'npx eslint -f json', baseResult, 300_000, {
+      cwd: '/tmp/app',
+      nodeHeap: { kind: 'configured', mb: 4096, source: 'env' },
+    });
+    expect(fromEnv?.kind).toBe('crash');
+    if (fromEnv?.kind === 'crash') {
+      expect(fromEnv.reason).toBe(
+        'eslint crashed (OOM, exit 134 / SIGABRT); node-heap was 4096 MB (from HEIMDALL_NODE_HEAP_MB)',
+      );
+      expect(fromEnv.reason).not.toContain('try --node-heap');
+      expect(fromEnv.crash.heapMb).toBe(4096);
+    }
+
+    const fromNodeOptions = classifyCommandFailure('eslint', 'npx eslint -f json', baseResult, 300_000, {
+      cwd: '/tmp/app',
+      nodeHeap: { kind: 'node-options', mb: 6144 },
+    });
+    expect(fromNodeOptions?.kind).toBe('crash');
+    if (fromNodeOptions?.kind === 'crash') {
+      expect(fromNodeOptions.reason).toBe(
+        'eslint crashed (OOM, exit 134 / SIGABRT); node-heap was 6144 MB (from NODE_OPTIONS)',
+      );
+      expect(fromNodeOptions.reason).not.toContain('try --node-heap');
+      expect(fromNodeOptions.crash.heapMb).toBe(6144);
+    }
+
+    const fromOpaqueNodeOptions = classifyCommandFailure('eslint', 'npx eslint -f json', baseResult, 300_000, {
+      cwd: '/tmp/app',
+      nodeHeap: { kind: 'node-options' },
+    });
+    expect(fromOpaqueNodeOptions?.kind).toBe('crash');
+    if (fromOpaqueNodeOptions?.kind === 'crash') {
+      expect(fromOpaqueNodeOptions.reason).toBe(
+        'eslint crashed (OOM, exit 134 / SIGABRT); node-heap was set in NODE_OPTIONS',
+      );
+      expect(fromOpaqueNodeOptions.reason).not.toContain('try --node-heap');
+      expect(fromOpaqueNodeOptions.crash.heapMb).toBeNull();
+    }
   });
 });
 
@@ -203,8 +448,8 @@ describe('runCommand', () => {
   it('reports a missing binary as a spawn or shell-not-found error', async () => {
     const command = 'gate-definitely-missing-binary-xyz';
     const result = await runCommand(command, process.cwd(), process.env);
-    const reason = classifyCommandFailure('typecheck', command, result, 300_000);
-    expect(reason).toMatch(/not found/i);
+    const failure = classifyCommandFailure('typecheck', command, result, 300_000);
+    expect(failure?.reason).toMatch(/not found/i);
   });
 
   it('never treats a signal-killed command as success', async () => {

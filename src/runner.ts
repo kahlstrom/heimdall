@@ -8,6 +8,7 @@ import path from 'node:path';
 import { parentBaseError, wideDiffDecision } from './base-guard.js';
 import {
   classifyCommandFailure,
+  commandFailureStep,
   gateInterruptReason,
   runCommand as defaultRunCommand,
   type RunCommandFn,
@@ -224,22 +225,21 @@ async function runShellList(
   env: NodeJS.ProcessEnv,
   runCommand: RunCommandFn,
   abortSignal: AbortSignal | undefined,
+  nodeHeap: NodeHeap,
 ): Promise<StepResult | undefined> {
   for (const [index, command] of commands.entries()) {
     const result = await runCommand(command, cwd, env, {
       timeoutMs: DEFAULT_STEP_TIMEOUT_MS,
       ...(abortSignal !== undefined ? { signal: abortSignal } : {}),
     });
-    const crash = classifyCommandFailure(
-      label,
-      command,
-      result,
-      DEFAULT_STEP_TIMEOUT_MS,
-      abortSignal,
-      `${label}[${index}] ${JSON.stringify(command)}`,
-    );
-    if (crash) {
-      return { kind: 'error', name: label, reason: crash };
+    const failure = classifyCommandFailure(label, command, result, DEFAULT_STEP_TIMEOUT_MS, {
+      cwd,
+      nodeHeap,
+      commandKey: `${label}[${index}] ${JSON.stringify(command)}`,
+      ...(abortSignal !== undefined ? { abortSignal } : {}),
+    });
+    if (failure) {
+      return commandFailureStep(label, failure);
     }
     if (result.exitCode !== 0) {
       return {
@@ -671,7 +671,15 @@ async function runGateWithHeap(
   const steps: StepResult[] = [];
   // Teardown still runs after SIGINT/SIGTERM so setup resources are not left up.
   const finish = async (): Promise<GateOutcome> => {
-    const teardownError = await runShellList(config.teardown, 'teardown', repoRoot, env, runCommand, undefined);
+    const teardownError = await runShellList(
+      config.teardown,
+      'teardown',
+      repoRoot,
+      env,
+      runCommand,
+      undefined,
+      nodeHeap.state,
+    );
     if (teardownError) {
       steps.push(teardownError);
     }
@@ -704,7 +712,15 @@ async function runGateWithHeap(
   };
 
   try {
-    const setupError = await runShellList(config.setup, 'setup', repoRoot, env, runCommand, abortSignal);
+    const setupError = await runShellList(
+      config.setup,
+      'setup',
+      repoRoot,
+      env,
+      runCommand,
+      abortSignal,
+      nodeHeap.state,
+    );
     if (setupError) {
       steps.push(setupError);
       return finish();
@@ -717,6 +733,7 @@ async function runGateWithHeap(
       scope: scope.value,
       runCommand,
       env,
+      nodeHeap: nodeHeap.state,
       ...(abortSignal !== undefined ? { abortSignal } : {}),
     };
 

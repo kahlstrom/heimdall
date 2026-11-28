@@ -149,10 +149,23 @@ export type CommandResult = {
   readonly timedOut: boolean;
 };
 
+export type StepCrash = {
+  readonly signal: NodeJS.Signals | null;
+  readonly exitCode: number | null;
+  readonly heapMb: number | null;
+  readonly nodeVersion: string;
+  readonly repo: string;
+};
+
 export type StepResult =
   | { readonly kind: 'pass'; readonly name: StepName; readonly excused?: readonly string[] }
   | { readonly kind: 'fail'; readonly name: FindingStepName; readonly findings: readonly Finding[] }
-  | { readonly kind: 'error'; readonly name: StepName | 'setup' | 'teardown'; readonly reason: string }
+  | {
+      readonly kind: 'error';
+      readonly name: StepName | 'setup' | 'teardown';
+      readonly reason: string;
+      readonly crash?: StepCrash;
+    }
   | { readonly kind: 'skipped'; readonly name: StepName; readonly reason: string };
 
 type OutcomeScope = {

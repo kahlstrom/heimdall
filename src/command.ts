@@ -7,8 +7,19 @@
  * grandchildren cannot outlive the step.
  */
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
+import path from 'node:path';
 import { stripAnsi } from './ansi.js';
-import { DEFAULT_STEP_TIMEOUT_MS, errorMessage, type CommandResult } from './types.js';
+import {
+  DEFAULT_STEP_TIMEOUT_MS,
+  NODE_HEAP_MB_ENV,
+  assertNever,
+  errorMessage,
+  type CommandResult,
+  type NodeHeap,
+  type StepCrash,
+  type StepName,
+  type StepResult,
+} from './types.js';
 
 const MAX_OUTPUT_BYTES = 16 * 1024 * 1024;
 const KILL_GRACE_MS = 200;
@@ -287,34 +298,175 @@ export function gateInterruptReason(signal: AbortSignal): string {
   return `heimdall interrupted (${name})`;
 }
 
+const CRASH_SIGNALS: ReadonlySet<NodeJS.Signals> = new Set([
+  'SIGABRT',
+  'SIGSEGV',
+  'SIGBUS',
+  'SIGILL',
+  'SIGTRAP',
+]);
+
+const CRASH_EXIT_SIGNALS: ReadonlyMap<number, NodeJS.Signals> = new Map([
+  [134, 'SIGABRT'],
+  [139, 'SIGSEGV'],
+  [133, 'SIGTRAP'],
+]);
+
+const OOM_STDERR_MARKERS = [
+  'JavaScript heap out of memory',
+  'FATAL ERROR: Reached heap limit',
+  'Allocation failed',
+] as const;
+
+const DEFAULT_NODE_HEAP_HINT = 'try --node-heap 8192';
+
+export type ClassifyCommandOptions = {
+  readonly abortSignal?: AbortSignal;
+  readonly commandKey?: string;
+  readonly nodeHeap?: NodeHeap;
+  readonly cwd?: string;
+};
+
+export type CommandFailure =
+  | { readonly kind: 'error'; readonly reason: string }
+  | { readonly kind: 'crash'; readonly reason: string; readonly crash: StepCrash };
+
+function hasOomMarker(stderr: string): boolean {
+  return OOM_STDERR_MARKERS.some((marker) => stderr.includes(marker));
+}
+
+function crashHeapMb(heap: NodeHeap): number | null {
+  switch (heap.kind) {
+    case 'default':
+      return null;
+    case 'configured':
+      return heap.mb;
+    case 'node-options':
+      return heap.mb ?? null;
+    default:
+      return assertNever(heap, 'unhandled node-heap state');
+  }
+}
+
+function crashHeapNote(heap: NodeHeap): string {
+  switch (heap.kind) {
+    case 'default':
+      return DEFAULT_NODE_HEAP_HINT;
+    case 'configured': {
+      const source = heap.source === 'cli' ? '--node-heap' : NODE_HEAP_MB_ENV;
+      return `node-heap was ${heap.mb} MB (from ${source})`;
+    }
+    case 'node-options':
+      return heap.mb !== undefined
+        ? `node-heap was ${heap.mb} MB (from NODE_OPTIONS)`
+        : 'node-heap was set in NODE_OPTIONS';
+    default:
+      return assertNever(heap, 'unhandled node-heap state');
+  }
+}
+
+function crashDetail(result: CommandResult, oom: boolean): string {
+  let cause: string;
+  if (result.signal !== null) {
+    cause = result.signal;
+  } else if (result.exitCode === null) {
+    cause = 'exit null';
+  } else {
+    const mappedSignal = CRASH_EXIT_SIGNALS.get(result.exitCode);
+    cause = mappedSignal !== undefined ? `exit ${result.exitCode} / ${mappedSignal}` : `exit ${result.exitCode}`;
+  }
+  return oom ? `OOM, ${cause}` : cause;
+}
+
+function detectCrash(
+  label: string,
+  result: CommandResult,
+  nodeHeap: NodeHeap,
+  cwd: string,
+): Extract<CommandFailure, { readonly kind: 'crash' }> | undefined {
+  // SIGKILL and exit 137 are external kills, not classified as native/OOM crashes.
+  if (result.signal === 'SIGKILL' || result.exitCode === 137) {
+    return undefined;
+  }
+  const signalCrash = result.signal !== null && CRASH_SIGNALS.has(result.signal);
+  const exitCrash = result.signal === null && result.exitCode !== null && CRASH_EXIT_SIGNALS.has(result.exitCode);
+  const oom = result.exitCode !== 0 && hasOomMarker(result.stderr);
+  const oomCrash = result.signal === null && oom;
+  if (!signalCrash && !exitCrash && !oomCrash) {
+    return undefined;
+  }
+  const detail = crashDetail(result, oom);
+  const heapNote = crashHeapNote(nodeHeap);
+  return {
+    kind: 'crash',
+    reason: `${label} crashed (${detail}); ${heapNote}`,
+    crash: {
+      signal: result.signal,
+      exitCode: result.exitCode,
+      heapMb: crashHeapMb(nodeHeap),
+      nodeVersion: process.version,
+      repo: path.basename(path.resolve(cwd)),
+    },
+  };
+}
+
 /**
- * Classify a finished command as a GATE ERROR reason, or undefined if the
+ * Classify a finished command as a GATE ERROR failure, or undefined if the
  * step should interpret the exit itself (pass/fail).
  *
- * Shell exit 127 (command not found) names the label and `commandKey` so
- * the user can install the tool or fix the command. Steps pass
- * `steps.<name>.command` (the default); setup/teardown pass the top-level
- * key and both the failing command and its index. Shared by every command step,
- * including baseline runs.
+ * Timeout and abort take precedence over everything. Shell exit 127 (command
+ * not found) names the label and `commandKey` so the user can install the tool
+ * or fix the command. OOM and native crashes return structured crash details
+ * alongside a clear reason naming the active heap or suggesting `--node-heap`.
+ * Shared by every command step, setup/teardown, and merge-base baseline runs.
  */
 export function classifyCommandFailure(
   label: string,
   command: string,
   result: CommandResult,
   timeoutMs: number,
-  abortSignal?: AbortSignal,
-  commandKey = `steps.${label}.command`,
-): string | undefined {
+  options?: ClassifyCommandOptions,
+): CommandFailure | undefined {
   if (result.timedOut) {
-    return `${label} timed out after ${timeoutMs}ms`;
+    return { kind: 'error', reason: `${label} timed out after ${timeoutMs}ms` };
   }
-  if (abortSignal?.aborted) {
-    return gateInterruptReason(abortSignal);
+  if (options?.abortSignal?.aborted) {
+    return { kind: 'error', reason: gateInterruptReason(options.abortSignal) };
+  }
+  if (result.spawnError || result.exitCode === 126) {
+    const reason = commandFailureReason(command, result);
+    return reason !== undefined ? { kind: 'error', reason } : undefined;
   }
   if (result.exitCode === 127) {
-    return `${label}: command not found (exit 127); install the tool or fix ${commandKey}`;
+    const commandKey = options?.commandKey ?? `steps.${label}.command`;
+    return {
+      kind: 'error',
+      reason: `${label}: command not found (exit 127); install the tool or fix ${commandKey}`,
+    };
   }
-  return commandFailureReason(command, result);
+  const crash = detectCrash(
+    label,
+    result,
+    options?.nodeHeap ?? { kind: 'default' },
+    options?.cwd ?? process.cwd(),
+  );
+  if (crash !== undefined) {
+    return crash;
+  }
+  const reason = commandFailureReason(command, result);
+  return reason !== undefined ? { kind: 'error', reason } : undefined;
+}
+
+export function commandFailureStep(
+  name: StepName | 'setup' | 'teardown',
+  failure: CommandFailure,
+  prefix?: string,
+): Extract<StepResult, { readonly kind: 'error' }> {
+  const reason = prefix !== undefined ? `${prefix}: ${failure.reason}` : failure.reason;
+  if (failure.kind === 'crash') {
+    return { kind: 'error', name, reason, crash: failure.crash };
+  }
+  return { kind: 'error', name, reason };
 }
 
 export function commandFailureReason(command: string, result: CommandResult): string | undefined {

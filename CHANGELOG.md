@@ -17,6 +17,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-integer, or non-positive values as a GATE ERROR (exit 2), and prints the
   active `node-heap:` limit in `HEIMDALL SUMMARY`.
 
+### Fixed
+
+- Classify OOM and native child-command crashes (`SIGABRT`, `SIGSEGV`,
+  `SIGBUS`, `SIGILL`, `SIGTRAP`, exits `134`/`139`/`133`, and V8 OOM stderr
+  messages; excluding `SIGKILL`/`137` and still letting timeout and abort win)
+  as a clear GATE ERROR (exit 2) before JSON/output parsing so crashed steps
+  do not report `output is not JSON`, naming the step, signal/exit, and either
+  `try --node-heap 8192` or the active heap limit, with structured `crash`
+  details (`signal`, `exitCode`, `heapMb`, `nodeVersion`, `repo`) on the error
+  `StepResult`.
+
 ## [0.3.1] - 2026-11-28
 
 ### Fixed

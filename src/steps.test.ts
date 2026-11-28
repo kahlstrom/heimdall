@@ -2813,3 +2813,143 @@ describe('lineChecksStep', () => {
   });
 });
 
+describe('crash classification across steps', () => {
+  it('classifies eslint exit 134 with empty or non-JSON stdout as a crash GATE ERROR, not non-JSON output', async () => {
+    for (const stdout of ['', 'partial { not json']) {
+      const step = await eslintStep.run(
+        ctx({
+          config: cfg({ steps: { eslint: { command: 'npx eslint -f json' } } }),
+          runCommand: async () => result({ exitCode: 134, stdout }),
+        }),
+      );
+      expect(step.kind).toBe('error');
+      if (step.kind === 'error') {
+        expect(step.reason).toBe('eslint crashed (exit 134 / SIGABRT); try --node-heap 8192');
+        expect(step.reason).not.toContain('output is not JSON');
+        expect(step.crash).toEqual({
+          signal: null,
+          exitCode: 134,
+          heapMb: null,
+          nodeVersion: process.version,
+          repo: path.basename(STEP_FILES),
+        });
+      }
+    }
+  });
+
+  it('classifies other JSON steps exiting 134 as crash GATE ERRORs instead of non-JSON output', async () => {
+    const cases = [
+      { step: knipStep, config: cfg({ steps: { knip: { command: 'npx knip --reporter json' } } }) },
+      { step: jscpdStep, config: cfg({ steps: { jscpd: { command: 'npx jscpd --reporters json' } } }) },
+      { step: secretsStep, config: cfg({ steps: { secrets: { command: 'npx secretlint --format json' } } }) },
+      { step: architectureStep, config: cfg({ steps: { architecture: { command: 'npx depcruise --output-type json' } } }) },
+    ] as const;
+
+    for (const { step, config } of cases) {
+      const res = await step.run(
+        ctx({
+          config,
+          runCommand: async () => result({ exitCode: 134, stdout: '' }),
+        }),
+      );
+      expect(res.kind).toBe('error');
+      if (res.kind === 'error') {
+        expect(res.reason).toBe(`${step.name} crashed (exit 134 / SIGABRT); try --node-heap 8192`);
+        expect(res.reason).not.toContain('output is not JSON');
+        expect(res.crash).toEqual({
+          signal: null,
+          exitCode: 134,
+          heapMb: null,
+          nodeVersion: process.version,
+          repo: path.basename(STEP_FILES),
+        });
+      }
+    }
+  });
+
+  it('does not treat exit 137 as a crash on JSON steps', async () => {
+    const step = await eslintStep.run(
+      ctx({
+        config: cfg({ steps: { eslint: { command: 'npx eslint -f json' } } }),
+        runCommand: async () => result({ exitCode: 137, stdout: '' }),
+      }),
+    );
+    expect(step.kind).toBe('error');
+    if (step.kind === 'error') {
+      expect(step.crash).toBeUndefined();
+      expect(step.reason).toContain('eslint output is not JSON');
+    }
+  });
+
+  it('does not false-positive when eslint JSON stdout contains OOM strings on exit 1', async () => {
+    const step = await eslintStep.run(
+      ctx({
+        config: cfg({ steps: { eslint: { command: 'npx eslint -f json' } } }),
+        runCommand: async () =>
+          result({
+            exitCode: 1,
+            stdout: JSON.stringify([
+              {
+                filePath: path.join(STEP_FILES, 'src/a.ts'),
+                source: "const marker = 'JavaScript heap out of memory';\n",
+                messages: [{ line: 1, ruleId: 'no-unused-vars', message: 'marker is unused', severity: 2 }],
+              },
+            ]),
+          }),
+      }),
+    );
+    expect(step.kind).toBe('fail');
+  });
+
+  it('attaches crash details with the repo folder name when a merge-base baseline rerun crashes', async () => {
+    await withTempRepo(async (repo) => {
+      writeRepoFile(repo, 'src/a.ts', 'export const a = 1;\n');
+      commitAll(repo, 'base');
+      git(repo, ['checkout', '-q', '-b', 'feat']);
+      writeRepoFile(repo, 'src/a.ts', 'export const a = 1;\nexport const b = 2;\n');
+      commitAll(repo, 'feat');
+
+      const base = resolveBaseRef(repo, 'main', undefined);
+      expect(base.ok).toBe(true);
+      if (!base.ok) return;
+      const scope = loadDiffScope(repo, base.value);
+      expect(scope.ok).toBe(true);
+      if (!scope.ok) return;
+
+      const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gate-base-crash-'));
+      try {
+        const res = await findingsAtMergeBase(
+          ctx({
+            cwd: repo,
+            tmpDir,
+            scope: scope.value,
+            config: cfg({ steps: { eslint: { command: 'npx eslint -f json' } } }),
+            nodeHeap: { kind: 'configured', mb: 8192, source: 'cli' },
+            runCommand: async () =>
+              result({ exitCode: 134, stdout: '', stderr: 'FATAL ERROR: Reached heap limit' }),
+          }),
+          'eslint',
+          'npx eslint -f json',
+          () => err('should not parse'),
+          relativizeFindingFiles,
+        );
+        expect('kind' in res && res.kind === 'error').toBe(true);
+        if ('kind' in res && res.kind === 'error') {
+          expect(res.reason).toBe(
+            'eslint baseline: eslint crashed (OOM, exit 134 / SIGABRT); node-heap was 8192 MB (from --node-heap)',
+          );
+          expect(res.crash).toEqual({
+            signal: null,
+            exitCode: 134,
+            heapMb: 8192,
+            nodeVersion: process.version,
+            repo: path.basename(repo),
+          });
+        }
+      } finally {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      }
+    });
+  });
+});
+

@@ -1809,6 +1809,127 @@ describe('runGate node-heap', () => {
   });
 });
 
+describe('runGate crash classification', () => {
+  it('surfaces structured crash details and heap-aware GATE ERROR lines for default, cli, env, and NODE_OPTIONS', async () => {
+    await seededRepo(async (repo) => {
+      const repoName = path.basename(repo);
+      const crashing = async () =>
+        result({
+          exitCode: 134,
+          stdout: '',
+          stderr: 'FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory',
+        });
+
+      await withProcessEnv({}, async () => {
+        const outcome = await runGate({ cwd: repo, runCommand: crashing });
+        expect(outcome.kind).toBe('error');
+        expect(outcome.exitCode).toBe(2);
+        const step = outcome.steps.find((s) => s.name === 'eslint');
+        expect(step?.kind).toBe('error');
+        if (step?.kind === 'error') {
+          expect(step.reason).toBe('eslint crashed (OOM, exit 134 / SIGABRT); try --node-heap 8192');
+          expect(step.crash).toEqual({
+            signal: null,
+            exitCode: 134,
+            heapMb: null,
+            nodeVersion: process.version,
+            repo: repoName,
+          });
+        }
+        expect(formatReport(outcome)).toContain(
+          'GATE ERROR: eslint crashed (OOM, exit 134 / SIGABRT); try --node-heap 8192',
+        );
+      }, ['HEIMDALL_NODE_HEAP_MB', 'NODE_OPTIONS']);
+
+      await withProcessEnv({}, async () => {
+        const outcome = await runGate({ cwd: repo, nodeHeapMb: 8192, runCommand: crashing });
+        expect(outcome.kind).toBe('error');
+        const step = outcome.steps.find((s) => s.name === 'eslint');
+        if (step?.kind === 'error') {
+          expect(step.reason).toBe(
+            'eslint crashed (OOM, exit 134 / SIGABRT); node-heap was 8192 MB (from --node-heap)',
+          );
+          expect(step.crash?.heapMb).toBe(8192);
+        }
+      }, ['HEIMDALL_NODE_HEAP_MB', 'NODE_OPTIONS']);
+
+      await withProcessEnv({ HEIMDALL_NODE_HEAP_MB: '4096' }, async () => {
+        const outcome = await runGate({ cwd: repo, runCommand: crashing });
+        expect(outcome.kind).toBe('error');
+        const step = outcome.steps.find((s) => s.name === 'eslint');
+        if (step?.kind === 'error') {
+          expect(step.reason).toBe(
+            'eslint crashed (OOM, exit 134 / SIGABRT); node-heap was 4096 MB (from HEIMDALL_NODE_HEAP_MB)',
+          );
+          expect(step.crash?.heapMb).toBe(4096);
+        }
+      }, ['NODE_OPTIONS']);
+
+      await withProcessEnv({ NODE_OPTIONS: '--max-old-space-size=6144' }, async () => {
+        const outcome = await runGate({ cwd: repo, runCommand: crashing });
+        expect(outcome.kind).toBe('error');
+        const step = outcome.steps.find((s) => s.name === 'eslint');
+        if (step?.kind === 'error') {
+          expect(step.reason).toBe(
+            'eslint crashed (OOM, exit 134 / SIGABRT); node-heap was 6144 MB (from NODE_OPTIONS)',
+          );
+          expect(step.crash?.heapMb).toBe(6144);
+        }
+      }, ['HEIMDALL_NODE_HEAP_MB']);
+    }, { steps: { eslint: { command: 'npx eslint -f json' } } });
+  });
+
+  it('classifies a real Node OOM child process as a crash GATE ERROR without creating side log files', async () => {
+    const oomCommand = `${process.execPath} --max-old-space-size=16 -e "const a = []; while (true) a.push(new Array(10000).fill(1));"`;
+    await seededRepo(async (repo) => {
+      const beforeEntries = fs.readdirSync(repo).sort();
+      await withProcessEnv({}, async () => {
+        const outcome = await runGate({ cwd: repo });
+        expect(outcome.kind).toBe('error');
+        expect(outcome.exitCode).toBe(2);
+        const step = outcome.steps.find((s) => s.name === 'eslint');
+        expect(step?.kind).toBe('error');
+        if (step?.kind === 'error') {
+          expect(step.reason).toContain('eslint crashed (OOM,');
+          expect(step.reason).toContain('try --node-heap 8192');
+          expect(step.reason).not.toContain('output is not JSON');
+          expect(step.crash).toBeDefined();
+          expect(step.crash?.heapMb).toBeNull();
+          expect(step.crash?.nodeVersion).toBe(process.version);
+          expect(step.crash?.repo).toBe(path.basename(repo));
+          expect(step.crash?.signal === 'SIGABRT' || step.crash?.exitCode === 134).toBe(true);
+        }
+      }, ['HEIMDALL_NODE_HEAP_MB', 'NODE_OPTIONS']);
+      expect(fs.readdirSync(repo).sort()).toEqual(beforeEntries);
+    }, { steps: { eslint: { command: oomCommand } } });
+  });
+
+  it('attaches crash details when a setup command crashes', async () => {
+    await seededRepo(async (repo) => {
+      await withProcessEnv({}, async () => {
+        const outcome = await runGate({
+          cwd: repo,
+          runCommand: async () => result({ exitCode: 139, stdout: '', stderr: '' }),
+        });
+        expect(outcome.kind).toBe('error');
+        expect(outcome.exitCode).toBe(2);
+        const step = outcome.steps.find((s) => s.name === 'setup');
+        expect(step?.kind).toBe('error');
+        if (step?.kind === 'error') {
+          expect(step.reason).toBe('setup crashed (exit 139 / SIGSEGV); try --node-heap 8192');
+          expect(step.crash).toEqual({
+            signal: null,
+            exitCode: 139,
+            heapMb: null,
+            nodeVersion: process.version,
+            repo: path.basename(repo),
+          });
+        }
+      }, ['HEIMDALL_NODE_HEAP_MB', 'NODE_OPTIONS']);
+    }, { setup: ['node seed.js'], steps: { tests: { command: 'npm test' } } });
+  });
+});
+
 describe('posixShellQuote', () => {
   it('keeps $ and backticks literal when interpolated into sh', () => {
     const printed = execFileSync('sh', ['-c', `printf '%s' ${posixShellQuote('$HOME and `uname`')}`], {
