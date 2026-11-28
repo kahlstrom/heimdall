@@ -1,6 +1,6 @@
 {
   "name": "@kahlstrom/heimdall",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Shared quality gate that coding agents and developers run before calling work done",
   "license": "MIT",
   "repository": {

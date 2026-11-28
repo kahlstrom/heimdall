@@ -7,15 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-28
+
 ### Added
 
 - Opt-in `--node-heap <mb>` CLI flag and `HEIMDALL_NODE_HEAP_MB` environment
   variable (positive integer in MB; off by default; flag wins over env) to
   append `--max-old-space-size=<mb>` to `NODE_OPTIONS` for `setup`, steps,
-  `teardown`, and merge-base reruns. Leaves an existing `NODE_OPTIONS`
-  `--max-old-space-size` unchanged with a warning, treats missing, empty,
-  non-integer, or non-positive values as a GATE ERROR (exit 2), and prints the
-  active `node-heap:` limit in `HEIMDALL SUMMARY`.
+  `teardown`, and merge-base reruns. With no flag and `HEIMDALL_NODE_HEAP_MB`
+  unset, nothing is appended and the Node default heap applies. A value that
+  is empty, non-integer, or non-positive is a GATE ERROR (exit 2), including a
+  flag with no value and an env var that is set but empty. Leaves an existing
+  `NODE_OPTIONS` `--max-old-space-size` unchanged with a warning, and prints
+  the active `node-heap:` limit in `HEIMDALL SUMMARY`.
 
 ### Fixed
 
