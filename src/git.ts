@@ -495,7 +495,7 @@ function verifyRef(cwd: string, spec: string): Result<string> {
   return ok(result.value.trim());
 }
 
-function currentBranchName(cwd: string): string {
+export function currentBranchName(cwd: string): string {
   const result = runGit(['rev-parse', '--abbrev-ref', 'HEAD'], cwd);
   if (!result.ok) {
     return '';

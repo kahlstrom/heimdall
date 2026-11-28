@@ -1449,6 +1449,103 @@ describe('runGate base guard', () => {
   });
 });
 
+describe('runGate HEAD movement detection', () => {
+  it('returns GATE ERROR with both shas when a step moves HEAD and keeps the starting sha in head:', async () => {
+    await seededRepo(async (repo) => {
+      const startSha = git(repo, ['rev-parse', 'HEAD']).trim();
+      let endSha = '';
+      const outcome = await runGate({
+        cwd: repo,
+        runCommand: async () => {
+          writeRepoFile(repo, 'src/other.ts', 'export const other = 2;\n');
+          commitAll(repo, 'concurrent commit');
+          endSha = git(repo, ['rev-parse', 'HEAD']).trim();
+          return result({ exitCode: 0, stdout: 'ok\n' });
+        },
+      });
+      expect(endSha).not.toBe(startSha);
+      expect(outcome.kind).toBe('error');
+      expect(outcome.exitCode).toBe(2);
+      if (outcome.kind === 'error') {
+        expect(outcome.reason).toBe(
+          `the repo's HEAD moved from ${startSha} to ${endSha} during this run (another process changed the checkout); rerun heimdall`,
+        );
+      }
+      expect(outcome.headSha).toBe(startSha);
+      const report = formatReport(outcome);
+      expect(report).toContain(`head:     ${startSha}`);
+      expect(report).not.toContain(`head:     ${endSha}`);
+    });
+  });
+
+  it('stays green with mockPass when HEAD does not move', async () => {
+    await seededRepo(async (repo) => {
+      const startSha = git(repo, ['rev-parse', 'HEAD']).trim();
+      const outcome = await runGate({ cwd: repo, ...mockPass() });
+      expect(outcome.kind).toBe('green');
+      expect(outcome.exitCode).toBe(0);
+      expect(outcome.headSha).toBe(startSha);
+      expect(formatReport(outcome)).toContain(`head:     ${startSha}`);
+    });
+  });
+
+  it('detects HEAD moving during teardown and reports branch switches', async () => {
+    await seededRepo(async (repo) => {
+      const startSha = git(repo, ['rev-parse', 'HEAD']).trim();
+      let endSha = '';
+      const outcome = await runGate({
+        cwd: repo,
+        runCommand: async (command) => {
+          if (command === 'echo down') {
+            git(repo, ['checkout', '-q', 'main']);
+            endSha = git(repo, ['rev-parse', 'HEAD']).trim();
+          }
+          return result({ exitCode: 0, stdout: 'ok\n' });
+        },
+      });
+      expect(endSha).not.toBe(startSha);
+      expect(outcome.kind).toBe('error');
+      expect(outcome.exitCode).toBe(2);
+      if (outcome.kind === 'error') {
+        expect(outcome.reason).toBe(
+          `the repo's HEAD moved from ${startSha} to ${endSha} (branch feat -> main) during this run (another process changed the checkout); rerun heimdall`,
+        );
+      }
+      expect(outcome.headSha).toBe(startSha);
+      expect(formatReport(outcome)).toContain(`head:     ${startSha}`);
+    }, {
+      steps: { tests: { command: 'npm test' } },
+      teardown: ['echo down'],
+    });
+  });
+
+  it('detects switching to another branch at the same commit during setup', async () => {
+    await seededRepo(async (repo) => {
+      const startSha = git(repo, ['rev-parse', 'HEAD']).trim();
+      const outcome = await runGate({
+        cwd: repo,
+        runCommand: async (command) => {
+          if (command === 'echo up') {
+            git(repo, ['checkout', '-q', '-b', 'other']);
+          }
+          return result({ exitCode: 0, stdout: 'ok\n' });
+        },
+      });
+      expect(outcome.kind).toBe('error');
+      expect(outcome.exitCode).toBe(2);
+      if (outcome.kind === 'error') {
+        expect(outcome.reason).toBe(
+          `the repo's HEAD branch moved from feat to other during this run (another process changed the checkout); rerun heimdall`,
+        );
+      }
+      expect(outcome.headSha).toBe(startSha);
+    }, {
+      setup: ['echo up'],
+      steps: { tests: { command: 'npm test' } },
+    });
+  });
+});
+
 describe('posixShellQuote', () => {
   it('keeps $ and backticks literal when interpolated into sh', () => {
     const printed = execFileSync('sh', ['-c', `printf '%s' ${posixShellQuote('$HOME and `uname`')}`], {

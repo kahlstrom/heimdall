@@ -19,6 +19,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   command-output snippet (parse-failure `stderr`, non-zero tool exit without
   parseable findings, and test-runner exit with no parseable failed tests),
   leaving short output unchanged.
+- Detect `HEAD` commit or branch changes made during a run (covering `setup`,
+  steps, and `teardown`): when another process moves `HEAD` while Heimdall is
+  running, exit 2 (`GATE ERROR`) with both commit shas and a rerun message
+  while keeping the starting sha in `outcome.headSha` and the summary's
+  `head:` line.
 
 ## [0.3.0] - 2026-11-27
 

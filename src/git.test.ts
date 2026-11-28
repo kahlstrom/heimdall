@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
+  currentBranchName,
   enclosingGitRoot,
   gitConfigLookupName,
   gitHeadSha,
@@ -345,6 +346,18 @@ describe('gitHeadSha', () => {
     await withTempRepo(async (repo) => {
       const sha = gitHeadSha(repo);
       expect(sha.ok).toBe(false);
+    });
+  });
+});
+
+describe('currentBranchName', () => {
+  it('returns the checked-out branch name and HEAD when detached', async () => {
+    await withTempRepo(async (repo) => {
+      writeRepoFile(repo, 'README.md', 'base\n');
+      commitAll(repo, 'initial');
+      expect(currentBranchName(repo)).toBe('main');
+      git(repo, ['checkout', '-q', '--detach', 'HEAD']);
+      expect(currentBranchName(repo)).toBe('HEAD');
     });
   });
 });

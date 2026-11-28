@@ -31,6 +31,7 @@ import {
 import { configFileInDiff, loadDiffScope, toRepoPath } from './diff.js';
 import { matchesAnyGlob } from './glob.js';
 import {
+  currentBranchName,
   enclosingGitRoot,
   gitConfigLookupName,
   gitHeadSha,
@@ -334,6 +335,28 @@ function withSyntheticSteps(steps: readonly StepResult[], findings: readonly Fin
   return [...extra, ...steps];
 }
 
+type HeadSnapshot = {
+  readonly sha: string;
+  readonly branch: string;
+};
+
+function headChangeReason(start: HeadSnapshot, repoRoot: string): string | undefined {
+  const endHead = gitHeadSha(repoRoot);
+  if (!endHead.ok) {
+    return `cannot re-read HEAD after run (started at ${start.sha}): ${endHead.error}; rerun heimdall`;
+  }
+  const endBranch = currentBranchName(repoRoot);
+  const branchMoved = start.branch !== '' && endBranch !== '' && endBranch !== start.branch;
+  if (endHead.value !== start.sha) {
+    const branchNote = branchMoved ? ` (branch ${start.branch} -> ${endBranch})` : '';
+    return `the repo's HEAD moved from ${start.sha} to ${endHead.value}${branchNote} during this run (another process changed the checkout); rerun heimdall`;
+  }
+  if (branchMoved) {
+    return `the repo's HEAD branch moved from ${start.branch} to ${endBranch} during this run (another process changed the checkout); rerun heimdall`;
+  }
+  return undefined;
+}
+
 export async function runGate(options: RunGateOptions): Promise<GateOutcome> {
   const runCommand = options.runCommand ?? defaultRunCommand;
   const processEnv = process.env;
@@ -371,6 +394,10 @@ export async function runGate(options: RunGateOptions): Promise<GateOutcome> {
       configPath,
     );
   }
+  const startHead: HeadSnapshot = {
+    sha: base.value.headSha,
+    branch: currentBranchName(repoRoot),
+  };
 
   const scope = loadDiffScope(repoRoot, base.value);
   if (!scope.ok) {
@@ -489,9 +516,27 @@ export async function runGate(options: RunGateOptions): Promise<GateOutcome> {
     if (teardownError) {
       steps.push(teardownError);
     }
+    const finalSteps = withSyntheticSteps(steps, syntheticFindings);
+    const moved = headChangeReason(startHead, repoRoot);
+    if (moved !== undefined) {
+      return withConfigPath(
+        gateError(
+          moved,
+          base.value.spec,
+          finalSteps,
+          base.value.mergeBaseSha,
+          warnings,
+          scope.value,
+          base.value.sha,
+          startHead.sha,
+        ),
+        configPath,
+        configCommit,
+      );
+    }
     return outcomeFromSteps(
       base.value,
-      withSyntheticSteps(steps, syntheticFindings),
+      finalSteps,
       warnings,
       scope.value,
       configPath,
