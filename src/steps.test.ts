@@ -62,6 +62,31 @@ describe('typecheckStep', () => {
       }),
     );
     expect(step.kind).toBe('error');
+    if (step.kind === 'error') {
+      expect(step.reason).toBe(
+        'typecheck command "npx tsc --noEmit" exited 1 without parseable findings: tsc: something broke',
+      );
+    }
+  });
+
+  it('is a GATE ERROR with a tail snippet when tsc fails after long output without parseable errors', async () => {
+    const tailError = 'FATAL: JavaScript heap out of memory';
+    const output = `HEAD_MARKER ${'a'.repeat(500)}\n${tailError}\n`;
+    const expectedTail = output.trim().slice(-400);
+    const step = await typecheckStep.run(
+      ctx({
+        config: cfg({ steps: { typecheck: { command: 'npx tsc --noEmit' } } }),
+        runCommand: async () => result({ exitCode: 1, stdout: output }),
+      }),
+    );
+    expect(step.kind).toBe('error');
+    if (step.kind === 'error') {
+      expect(step.reason).toBe(
+        `typecheck command "npx tsc --noEmit" exited 1 without parseable findings: ...${expectedTail}`,
+      );
+      expect(step.reason).toContain(tailError);
+      expect(step.reason).not.toContain('HEAD_MARKER');
+    }
   });
 
   it('passes when tsc exits 0', async () => {
@@ -111,6 +136,40 @@ describe('eslintStep', () => {
       }),
     );
     expect(step.kind).toBe('error');
+  });
+
+  it('is a GATE ERROR with a tail stderr snippet when unparseable output has long stderr', async () => {
+    const tailError = 'Error: Cannot find plugin eslint-plugin-missing';
+    const stderr = `EARLY_STDERR ${'w'.repeat(450)}\n${tailError}\n`;
+    const expectedTail = stderr.trim().slice(-400);
+    const step = await eslintStep.run(
+      ctx({
+        config: cfg({ steps: { eslint: { command: 'npx eslint -f json' } } }),
+        runCommand: async () => result({ exitCode: 2, stdout: 'not json', stderr }),
+      }),
+    );
+    expect(step.kind).toBe('error');
+    if (step.kind === 'error') {
+      expect(step.reason).toContain(`(stderr: ...${expectedTail})`);
+      expect(step.reason).toContain(tailError);
+      expect(step.reason).not.toContain('EARLY_STDERR');
+    }
+  });
+
+  it('keeps stderr at or under 400 chars unchanged without an ellipsis', async () => {
+    const exact400 = `${'s'.repeat(390)}END_MARKER`;
+    expect(exact400.length).toBe(400);
+    const step = await eslintStep.run(
+      ctx({
+        config: cfg({ steps: { eslint: { command: 'npx eslint -f json' } } }),
+        runCommand: async () => result({ exitCode: 2, stdout: 'not json', stderr: `  ${exact400}\n` }),
+      }),
+    );
+    expect(step.kind).toBe('error');
+    if (step.kind === 'error') {
+      expect(step.reason).toContain(`(stderr: ${exact400})`);
+      expect(step.reason).not.toContain('...');
+    }
   });
 
   it('parses JSON from stdout when stderr has a Node warning', async () => {
@@ -1029,6 +1088,28 @@ describe('testsStep', () => {
       }),
     );
     expect(step.kind).toBe('error');
+    if (step.kind === 'error') {
+      expect(step.reason).toBe('test runner exited 1 with no parseable failed tests: Boom');
+    }
+  });
+
+  it('includes the trailing error with a leading ellipsis when test output is long and unparseable', async () => {
+    const tailError = 'Error: database connection refused on port 5432';
+    const stdout = `BANNER_START ${'p'.repeat(500)}\n`;
+    const combined = `${stdout}\n${tailError}`;
+    const expectedTail = combined.trim().slice(-400);
+    const step = await testsStep.run(
+      ctx({
+        config: cfg({ steps: { tests: { command: 'npx vitest run' } } }),
+        runCommand: async () => result({ exitCode: 1, stdout, stderr: `${tailError}\n` }),
+      }),
+    );
+    expect(step.kind).toBe('error');
+    if (step.kind === 'error') {
+      expect(step.reason).toBe(`test runner exited 1 with no parseable failed tests: ...${expectedTail}`);
+      expect(step.reason).toContain(tailError);
+      expect(step.reason).not.toContain('BANNER_START');
+    }
   });
 
   it('is a GATE ERROR when the runner finds no test files', async () => {

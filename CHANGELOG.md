@@ -14,6 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   to plain text, and default `NO_COLOR=1` in the environment passed to
   `setup`, step, and `teardown` commands (preserving any existing `NO_COLOR`
   value).
+- Attach the trailing 400 characters (prefixed with `...` when truncated)
+  instead of the leading 400 characters when GATE ERROR messages include a
+  command-output snippet (parse-failure `stderr`, non-zero tool exit without
+  parseable findings, and test-runner exit with no parseable failed tests),
+  leaving short output unchanged.
 
 ## [0.3.0] - 2026-11-27
 

@@ -129,9 +129,19 @@ function isStepResult(value: unknown): value is StepResult {
   );
 }
 
+const ERROR_SNIPPET_LENGTH = 400;
+
+function tailSnippet(text: string, maxLength = ERROR_SNIPPET_LENGTH): string {
+  const trimmed = text.trim();
+  if (trimmed.length <= maxLength) {
+    return trimmed;
+  }
+  return `...${trimmed.slice(-maxLength)}`;
+}
+
 function parseFailureWithStderr(error: string, result: CommandResult): string {
-  const stderr = result.stderr.trim();
-  return stderr ? `${error} (stderr: ${stderr.slice(0, 400)})` : error;
+  const stderr = tailSnippet(result.stderr);
+  return stderr ? `${error} (stderr: ${stderr})` : error;
 }
 
 function jsonStdout(result: CommandResult, reportFile: string | undefined): string {
@@ -166,8 +176,7 @@ function toolFailedWithoutFindings(
   command: string,
   result: CommandResult,
 ): StepResult {
-  const output = combinedOutput(result).trim();
-  const snippet = output.slice(0, 400);
+  const snippet = tailSnippet(combinedOutput(result));
   return {
     kind: 'error',
     name,
@@ -274,8 +283,7 @@ export const testsStep: GateStep = {
     }
     const failures = parseTestRun(ran.result.stdout, combinedOutput(ran.result));
     if (!failures || failures.length === 0) {
-      const output = combinedOutput(ran.result).trim();
-      const snippet = output.slice(0, 400);
+      const snippet = tailSnippet(combinedOutput(ran.result));
       return {
         kind: 'error',
         name: 'tests',
