@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Strip ANSI/CSI escape sequences before parsing test-runner and typecheck
+  output so colored `FAIL`, summary-count, and `tsc` lines parse identically
+  to plain text, and default `NO_COLOR=1` in the environment passed to
+  `setup`, step, and `teardown` commands (preserving any existing `NO_COLOR`
+  value).
+
 ## [0.3.0] - 2026-11-27
 
 ### Added

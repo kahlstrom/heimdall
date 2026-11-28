@@ -713,6 +713,58 @@ describe('runGate exit codes', () => {
     });
   });
 
+  it('defaults NO_COLOR=1 for setup, step, and teardown commands without changing FORCE_COLOR', async () => {
+    await seededRepo(async (repo) => {
+      const seen: Array<{ command: string; noColor: string | undefined; forceColor: string | undefined }> = [];
+      await withProcessEnv({ FORCE_COLOR: '1' }, async () => {
+        const outcome = await runGate({
+          cwd: repo,
+          runCommand: async (command, cwd, env) => {
+            seen.push({ command, noColor: env.NO_COLOR, forceColor: env.FORCE_COLOR });
+            return result({ exitCode: 0, stdout: 'ok\n' });
+          },
+        });
+        expect(outcome.kind).toBe('green');
+      }, ['NO_COLOR']);
+      expect(seen).toEqual([
+        { command: 'echo up', noColor: '1', forceColor: '1' },
+        { command: 'npm test', noColor: '1', forceColor: '1' },
+        { command: 'echo down', noColor: '1', forceColor: '1' },
+      ]);
+    }, {
+      setup: ['echo up'],
+      steps: { tests: { command: 'npm test' } },
+      teardown: ['echo down'],
+    });
+  });
+
+  it('preserves an existing process.env.NO_COLOR value (including empty string)', async () => {
+    await seededRepo(async (repo) => {
+      for (const existing of ['0', '']) {
+        const seen: Array<{ command: string; noColor: string | undefined }> = [];
+        await withProcessEnv({ NO_COLOR: existing }, async () => {
+          const outcome = await runGate({
+            cwd: repo,
+            runCommand: async (command, cwd, env) => {
+              seen.push({ command, noColor: env.NO_COLOR });
+              return result({ exitCode: 0, stdout: 'ok\n' });
+            },
+          });
+          expect(outcome.kind).toBe('green');
+        });
+        expect(seen).toEqual([
+          { command: 'echo up', noColor: existing },
+          { command: 'npm test', noColor: existing },
+          { command: 'echo down', noColor: existing },
+        ]);
+      }
+    }, {
+      setup: ['echo up'],
+      steps: { tests: { command: 'npm test' } },
+      teardown: ['echo down'],
+    });
+  });
+
   it('loads in-repo gate.config.json as a deprecated fallback with a warning', async () => {
     await withTempRepo(async (repo) => {
       writeRepoFile(repo, 'src/ok.ts', 'export const n = 1;\n');

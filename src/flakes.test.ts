@@ -167,6 +167,15 @@ describe('parseTestRun text', () => {
     ]);
   });
 
+  it('parses an ANSI-colored vitest FAIL line identically to plain text', () => {
+    const plain = ' FAIL  src/a.test.ts > suite > does the thing\n';
+    const colored = '\x1b[31m\x1b[1mFAIL\x1b[22m\x1b[39m  src/a.test.ts > suite > does the thing\n';
+    expect(parseTestRun('', colored)).toEqual(parseTestRun('', plain));
+    expect(parseTestRun('', colored)).toEqual([
+      { kind: 'test', file: 'src/a.test.ts', name: 'suite > does the thing' },
+    ]);
+  });
+
   it('parses a file that failed to load', () => {
     const output = ' FAIL  src/load.test.ts [ src/load.test.ts ]\n';
     expect(parseTestRun('', output)).toEqual([
@@ -199,6 +208,19 @@ describe('parseTestRun text', () => {
     expect(parseTestRun('', output)).toEqual([
       { kind: 'test', file: 'src/a.test.ts', name: 'suite > times out talking to billing' },
       { kind: 'unparsed', file: '', name: 'failure with no FAIL file > title line' },
+    ]);
+  });
+
+  it('reconciles ANSI-colored summary counts and errors', () => {
+    const output = [
+      '\x1b[31m\x1b[1mFAIL\x1b[22m\x1b[39m  src/a.test.ts > suite > does the thing',
+      '      \x1b[2mTests\x1b[22m  \x1b[1m\x1b[31m2 failed\x1b[39m\x1b[22m | \x1b[32m1 passed\x1b[39m (3)',
+      '     \x1b[2mErrors\x1b[22m  \x1b[1m\x1b[31m1 error\x1b[39m\x1b[22m',
+    ].join('\n');
+    expect(parseTestRun('', output)).toEqual([
+      { kind: 'test', file: 'src/a.test.ts', name: 'suite > does the thing' },
+      { kind: 'unparsed', file: '', name: 'failure with no FAIL file > title line' },
+      { kind: 'unhandled', file: '', name: 'unhandled error' },
     ]);
   });
 

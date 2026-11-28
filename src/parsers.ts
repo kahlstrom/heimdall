@@ -2,6 +2,7 @@
  * Parse tool output into Findings. Unparseable output is a GATE ERROR at the
  * step layer — these functions return Result so the caller can map it.
  */
+import { stripAnsi } from './ansi.js';
 import { extractJson } from './json.js';
 import { err, isRecord, ok, type Finding, type Result, type StepName } from './types.js';
 
@@ -517,7 +518,7 @@ export function parseTypecheckOutput(output: string): Result<Finding[]> {
   const findings: Finding[] = [];
   const paren = /^(.+?)\((\d+),\d+\):\s+error\s+(TS\d+):\s+(.+)$/;
   const colon = /^(.+?):(\d+):\d+\s+-\s+error\s+(TS\d+):\s+(.+)$/;
-  for (const raw of output.split('\n')) {
+  for (const raw of stripAnsi(output).split('\n')) {
     const trimmed = raw.trim();
     const match = paren.exec(trimmed) ?? colon.exec(trimmed);
     if (!match) {

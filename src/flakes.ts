@@ -2,6 +2,7 @@
  * Known-flake handling is by file plus full title, never a whole file and
  * never a bare leaf name. A leaf like "renders" would excuse every suite.
  */
+import { stripAnsi } from './ansi.js';
 import { extractJsonWhere } from './json.js';
 import { isRecord } from './types.js';
 
@@ -253,18 +254,20 @@ function parseTextFailures(output: string): TestFailure[] {
  * are still taken from text when present.
  */
 export function parseTestRun(stdout: string, combined: string): readonly TestFailure[] | undefined {
-  const reporter = extractJsonWhere(stdout, isTestReporterJson);
+  const cleanStdout = stripAnsi(stdout);
+  const cleanCombined = stripAnsi(combined);
+  const reporter = extractJsonWhere(cleanStdout, isTestReporterJson);
   if (reporter.ok && isTestReporterJson(reporter.value)) {
     const failures = parseReporterJson(reporter.value);
     const seen = new Set(failures.map(failureKey));
-    for (const extra of parseTextFailures(combined)) {
+    for (const extra of parseTextFailures(cleanCombined)) {
       if (extra.kind === 'unhandled') {
         addFailure(failures, seen, extra);
       }
     }
     return failures;
   }
-  const textFailures = parseTextFailures(combined);
+  const textFailures = parseTextFailures(cleanCombined);
   if (textFailures.length === 0) {
     return undefined;
   }

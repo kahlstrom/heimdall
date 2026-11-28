@@ -503,6 +503,24 @@ describe('parseTypecheckOutput', () => {
     }
   });
 
+  it('parses ANSI-colored tsc pretty output', () => {
+    const colored =
+      "\x1b[96msrc/a.ts\x1b[0m:\x1b[93m10\x1b[0m:\x1b[93m5\x1b[0m - \x1b[91merror\x1b[0m\x1b[90m TS2322: \x1b[0mType 'string' is not assignable to type 'number'.";
+    const parsed = parseTypecheckOutput(colored);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.value).toEqual([
+        {
+          step: 'typecheck',
+          file: 'src/a.ts',
+          line: 10,
+          rule: 'TS2322',
+          message: "Type 'string' is not assignable to type 'number'.",
+        },
+      ]);
+    }
+  });
+
   it('ignores warnings', () => {
     const parsed = parseTypecheckOutput('src/a.ts(1,1): warning TS9999: whatever');
     expect(parsed.ok).toBe(true);

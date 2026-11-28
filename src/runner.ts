@@ -476,6 +476,7 @@ export async function runGate(options: RunGateOptions): Promise<GateOutcome> {
   const configDir = path.dirname(configPath);
   const env: NodeJS.ProcessEnv = {
     ...processEnv,
+    ...(processEnv.NO_COLOR === undefined ? { NO_COLOR: '1' } : {}),
     [TMP_ENV]: tmpDir,
     [LEGACY_TMP_ENV]: tmpDir,
     [CONFIG_DIR_ENV]: configDir,
