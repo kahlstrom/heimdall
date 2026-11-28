@@ -443,7 +443,7 @@ instead of a surprise RED.
 ## CLI flags
 
 ```text
-heimdall [--config <path>] [--cwd <path>] [--base <ref>] [--allow-wide]
+heimdall [--config <path>] [--cwd <path>] [--base <ref>] [--allow-wide] [--node-heap <mb>]
 ```
 
 | Flag | Meaning |
@@ -452,6 +452,7 @@ heimdall [--config <path>] [--cwd <path>] [--base <ref>] [--allow-wide]
 | `--cwd <path>` | Repo to check (default: current directory). Heimdall finds the git root from here. |
 | `--base <ref>` | Comparison base. Overrides config `baseRef`. A ref that does not resolve is a GATE ERROR. |
 | `--allow-wide` | Continue when the diff exceeds `maxChangedFiles` (same as `HEIMDALL_ALLOW_WIDE=1`). |
+| `--node-heap <mb>` | Append `--max-old-space-size=<mb>` to `NODE_OPTIONS` for setup, steps, teardown, and merge-base reruns (positive integer; off by default; overrides `HEIMDALL_NODE_HEAP_MB`; leaves an existing `NODE_OPTIONS` `--max-old-space-size` unchanged with a warning). |
 | `-h`, `--help` | Print help and exit 0. |
 
 Unknown flags are a GATE ERROR.
@@ -470,6 +471,7 @@ Unknown flags are a GATE ERROR.
 | `GATE_ALLOW_CONFIG_CHANGE` | Deprecated alias. |
 | `HEIMDALL_ALLOW_WIDE` | `=1` continues when the diff exceeds `maxChangedFiles`. |
 | `GATE_ALLOW_WIDE` | Deprecated alias. |
+| `HEIMDALL_NODE_HEAP_MB` | Positive integer (MB). Same as `--node-heap <mb>` when the flag is not passed; off by default. |
 
 Using a `GATE_*` name without the matching `HEIMDALL_*` name prints a one-line
 deprecation warning. Using `gate.config.json` instead of

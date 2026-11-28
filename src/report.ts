@@ -7,9 +7,11 @@ import {
   EXIT_GATE_ERROR,
   EXIT_GREEN,
   EXIT_RED,
+  NODE_HEAP_MB_ENV,
   assertNever,
   type Finding,
   type GateOutcome,
+  type NodeHeap,
   type StepResult,
 } from './types.js';
 
@@ -114,6 +116,21 @@ export function unversionedConfigWarning(configDir: string): string {
   return `config is not version-controlled (${configDir})`;
 }
 
+function formatNodeHeap(heap: NodeHeap): string {
+  switch (heap.kind) {
+    case 'default':
+      return 'default';
+    case 'configured': {
+      const source = heap.source === 'cli' ? '--node-heap' : NODE_HEAP_MB_ENV;
+      return `${heap.mb} MB (from ${source})`;
+    }
+    case 'node-options':
+      return heap.mb !== undefined ? `${heap.mb} MB (from NODE_OPTIONS)` : 'from NODE_OPTIONS';
+    default:
+      return assertNever(heap, 'unhandled node-heap state');
+  }
+}
+
 export function formatReport(outcome: GateOutcome): string {
   const lines: string[] = [];
   const findings = collectFindings(outcome);
@@ -151,6 +168,9 @@ export function formatReport(outcome: GateOutcome): string {
   }
   if (outcome.changedFileCount !== undefined) {
     lines.push(`scope:    ${outcome.changedFileCount} files, ${outcome.addedLineCount ?? 0} added lines`);
+  }
+  if (outcome.nodeHeap !== undefined) {
+    lines.push(`node-heap: ${formatNodeHeap(outcome.nodeHeap)}`);
   }
   for (const step of outcome.steps) {
     lines.push(stepLine(step));

@@ -10,6 +10,13 @@ export const EXIT_GREEN = 0;
 export const EXIT_RED = 1;
 export const EXIT_GATE_ERROR = 2;
 
+export const NODE_HEAP_MB_ENV = 'HEIMDALL_NODE_HEAP_MB';
+
+export type NodeHeap =
+  | { readonly kind: 'default' }
+  | { readonly kind: 'configured'; readonly mb: number; readonly source: 'cli' | 'env' }
+  | { readonly kind: 'node-options'; readonly mb?: number };
+
 /** Default per-step command timeout (5 minutes). Hung tools must not block the gate. */
 export const DEFAULT_STEP_TIMEOUT_MS = 300_000;
 
@@ -155,6 +162,7 @@ type OutcomeScope = {
   readonly configPath?: string;
   /** HEAD of the git repo that contains an outside-repo config directory. */
   readonly configCommit?: string;
+  readonly nodeHeap?: NodeHeap;
 };
 
 export type GateOutcome =

@@ -2,10 +2,10 @@
  * CLI argument handling. Unknown flags are GATE ERROR, not a crash.
  */
 import { formatReport } from './report.js';
-import { runGate } from './runner.js';
+import { parseNodeHeapMb, runGate } from './runner.js';
 import { EXIT_GATE_ERROR, EXIT_GREEN, errorMessage, type ExitCode } from './types.js';
 
-export const HELP = `Usage: heimdall [--config <path>] [--cwd <path>] [--base <ref>] [--allow-wide]
+export const HELP = `Usage: heimdall [--config <path>] [--cwd <path>] [--base <ref>] [--allow-wide] [--node-heap <mb>]
 
 Run Heimdall, the shared quality gate, from inside a target git repo.
 
@@ -22,6 +22,8 @@ Run Heimdall, the shared quality gate, from inside a target git repo.
   --base <ref>      comparison base (overrides config baseRef)
   --allow-wide      continue when the diff exceeds maxChangedFiles
                     (same as HEIMDALL_ALLOW_WIDE=1)
+  --node-heap <mb>  append --max-old-space-size=<mb> to child NODE_OPTIONS
+                    (positive integer; overrides HEIMDALL_NODE_HEAP_MB)
   -h, --help        show this help
 
 Exit codes:
@@ -43,6 +45,7 @@ export type ParsedArgs =
       readonly configPath?: string;
       readonly baseRef?: string;
       readonly allowWide?: boolean;
+      readonly nodeHeapMb?: number;
     }
   | { readonly kind: 'error'; readonly reason: string };
 
@@ -85,6 +88,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   let configPath: string | undefined;
   let baseRef: string | undefined;
   let allowWide = false;
+  let nodeHeapMb: number | undefined;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === '-h' || arg === '--help') {
@@ -121,6 +125,24 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
       index += baseValue.skip;
       continue;
     }
+    const nodeHeapValue = readFlagValue(
+      argv,
+      index,
+      '--node-heap',
+      '--node-heap requires a positive integer (MB)',
+    );
+    if (nodeHeapValue.kind === 'error') {
+      return nodeHeapValue;
+    }
+    if (nodeHeapValue.kind === 'ok') {
+      const parsed = parseNodeHeapMb(nodeHeapValue.value, '--node-heap');
+      if (!parsed.ok) {
+        return { kind: 'error', reason: parsed.error };
+      }
+      nodeHeapMb = parsed.value;
+      index += nodeHeapValue.skip;
+      continue;
+    }
     return { kind: 'error', reason: `unknown argument: ${arg}` };
   }
   const run: {
@@ -129,6 +151,7 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
     configPath?: string;
     baseRef?: string;
     allowWide?: boolean;
+    nodeHeapMb?: number;
   } = { kind: 'run' };
   if (cwd !== undefined) {
     run.cwd = cwd;
@@ -141,6 +164,9 @@ export function parseArgs(argv: readonly string[]): ParsedArgs {
   }
   if (allowWide) {
     run.allowWide = true;
+  }
+  if (nodeHeapMb !== undefined) {
+    run.nodeHeapMb = nodeHeapMb;
   }
   return run;
 }
@@ -166,6 +192,7 @@ export async function main(
       ...(args.configPath !== undefined ? { configPath: args.configPath } : {}),
       ...(args.baseRef !== undefined ? { baseRef: args.baseRef } : {}),
       ...(args.allowWide === true ? { allowWide: true } : {}),
+      ...(args.nodeHeapMb !== undefined ? { nodeHeapMb: args.nodeHeapMb } : {}),
       ...(abortSignal !== undefined ? { abortSignal } : {}),
       log: (text) => io.stdout.write(text),
     });

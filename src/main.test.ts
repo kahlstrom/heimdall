@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { HELP, main, parseArgs } from './main.js';
+import { withProcessEnv } from '../test/helpers/gate-test.js';
 import { commitAll, git, withTempRepo, writeRepoFile } from '../test/helpers/temp-repo.js';
 
 describe('parseArgs', () => {
@@ -70,6 +71,37 @@ describe('parseArgs', () => {
     const parsed = parseArgs(['--cwd', '--config', 'x.json']);
     expect(parsed).toEqual({ kind: 'error', reason: '--cwd requires a path' });
   });
+
+  it('parses --node-heap in space and = forms', () => {
+    expect(parseArgs(['--node-heap', '8192'])).toEqual({ kind: 'run', nodeHeapMb: 8192 });
+    expect(parseArgs(['--node-heap=8192'])).toEqual({ kind: 'run', nodeHeapMb: 8192 });
+  });
+
+  it('rejects missing, empty, non-integer, or non-positive --node-heap values', () => {
+    for (const argv of [
+      ['--node-heap'],
+      ['--node-heap='],
+      ['--node-heap', ''],
+      ['--node-heap', '   '],
+      ['--node-heap', '--allow-wide'],
+      ['--node-heap', '0'],
+      ['--node-heap=0'],
+      ['--node-heap', '-1'],
+      ['--node-heap=-1'],
+      ['--node-heap', '4.5'],
+      ['--node-heap=4.5'],
+      ['--node-heap', 'abc'],
+      ['--node-heap=8192mb'],
+      ['--node-heap=1e4'],
+    ]) {
+      expect(parseArgs(argv).kind).toBe('error');
+    }
+  });
+
+  it('documents --node-heap in HELP', () => {
+    expect(HELP).toContain('--node-heap <mb>');
+    expect(HELP).toContain('HEIMDALL_NODE_HEAP_MB');
+  });
 });
 
 describe('main', () => {
@@ -113,13 +145,52 @@ describe('main', () => {
     });
   });
 
-  it('unknown flags exit 2 as GATE ERROR', async () => {
+  const runCli = async (argv: readonly string[], cwd = '/tmp') => {
+    const stdout: string[] = [];
     const stderr: string[] = [];
-    const code = await main(['--nope'], '/tmp', {
-      stdout: { write() {} },
+    const code = await main(argv, cwd, {
+      stdout: { write(text) { stdout.push(text); } },
       stderr: { write(text) { stderr.push(text); } },
     });
-    expect(code).toBe(2);
-    expect(stderr.join('')).toMatch(/^GATE ERROR:/);
+    return { code, stdout: stdout.join(''), stderr: stderr.join('') };
+  };
+
+  it('unknown flags exit 2 as GATE ERROR', async () => {
+    const ran = await runCli(['--nope']);
+    expect(ran.code).toBe(2);
+    expect(ran.stderr).toMatch(/^GATE ERROR:/);
+  });
+
+  it('invalid --node-heap exits 2 as GATE ERROR', async () => {
+    const ran = await runCli(['--node-heap', '0']);
+    expect(ran.code).toBe(2);
+    expect(ran.stderr).toMatch(/^GATE ERROR:.*--node-heap/);
+  });
+
+  it('passes --node-heap to child commands and reports the active limit in the summary', async () => {
+    await withTempRepo(async (repo) => {
+      writeRepoFile(repo, 'src/a.ts', 'export const a = 1;\n');
+      writeRepoFile(
+        repo,
+        'heimdall.config.json',
+        JSON.stringify({
+          steps: {
+            tests: {
+              command: `${process.execPath} -e "if ((process.env.NODE_OPTIONS || '').includes('--max-old-space-size=8192')) process.exit(0); process.exit(1);"`,
+            },
+          },
+        }),
+      );
+      commitAll(repo, 'init');
+      await withProcessEnv({}, async () => {
+        const stdout: string[] = [];
+        const code = await main(['--base', 'main', '--node-heap=8192'], repo, {
+          stdout: { write(text) { stdout.push(text); } },
+          stderr: { write() {} },
+        });
+        expect(code).toBe(0);
+        expect(stdout.join('')).toContain('node-heap: 8192 MB (from --node-heap)');
+      }, ['NODE_OPTIONS', 'HEIMDALL_NODE_HEAP_MB']);
+    });
   });
 });

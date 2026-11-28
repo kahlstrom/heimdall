@@ -360,4 +360,29 @@ describe('formatReport completeness', () => {
     expect(text).toContain('knip-production FAIL  (1)');
     expect(text).toContain('architecture    pass');
   });
+
+  it('prints node-heap summary lines for default, CLI, env, and NODE_OPTIONS', () => {
+    const baseOutcome: GateOutcome = {
+      kind: 'green',
+      exitCode: EXIT_GREEN,
+      baseRef: 'main',
+      mergeBaseSha: MERGE_BASE_SHA,
+      headSha: HEAD_SHA,
+      warnings: [],
+      steps: [{ kind: 'pass', name: 'tests' }],
+    };
+    expect(formatReport({ ...baseOutcome, nodeHeap: { kind: 'default' } })).toContain('node-heap: default');
+    expect(
+      formatReport({ ...baseOutcome, nodeHeap: { kind: 'configured', mb: 8192, source: 'cli' } }),
+    ).toContain('node-heap: 8192 MB (from --node-heap)');
+    expect(
+      formatReport({ ...baseOutcome, nodeHeap: { kind: 'configured', mb: 8192, source: 'env' } }),
+    ).toContain('node-heap: 8192 MB (from HEIMDALL_NODE_HEAP_MB)');
+    expect(
+      formatReport({ ...baseOutcome, nodeHeap: { kind: 'node-options', mb: 4096 } }),
+    ).toContain('node-heap: 4096 MB (from NODE_OPTIONS)');
+    expect(
+      formatReport({ ...baseOutcome, nodeHeap: { kind: 'node-options' } }),
+    ).toContain('node-heap: from NODE_OPTIONS');
+  });
 });

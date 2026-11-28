@@ -1588,6 +1588,227 @@ describe('runGate HEAD movement detection', () => {
   });
 });
 
+describe('runGate node-heap', () => {
+  const knipCurrent = JSON.stringify({
+    files: [],
+    issues: [{ file: 'src/new.ts', exports: [{ name: 'value', line: 1 }] }],
+  });
+  const knipBase = JSON.stringify({ files: [], issues: [] });
+  const lifecycleConfig = {
+    setup: ['echo up'],
+    steps: { knip: { command: 'knip --reporter json' } },
+    teardown: ['echo down'],
+  };
+
+  function captureLifecycleCommand(
+    seen: Array<{ command: string; cwd: string; nodeOptions: string | undefined }>,
+  ) {
+    return async (command: string, cwd: string, env: NodeJS.ProcessEnv) => {
+      seen.push({ command, cwd, nodeOptions: env.NODE_OPTIONS });
+      if (command === 'knip --reporter json') {
+        return cwd.includes('knip-base')
+          ? result({ exitCode: 0, stdout: knipBase })
+          : result({ exitCode: 1, stdout: knipCurrent });
+      }
+      return result({ exitCode: 0, stdout: 'ok\n' });
+    };
+  }
+
+  it('leaves child NODE_OPTIONS unchanged and reports node-heap: default when neither flag nor env is set', async () => {
+    await seededRepo(async (repo) => {
+      for (const existing of [undefined, '--enable-source-maps']) {
+        const seen: Array<{ command: string; nodeOptions: string | undefined }> = [];
+        const overrides = existing === undefined ? {} : { NODE_OPTIONS: existing };
+        const unset = existing === undefined ? ['NODE_OPTIONS', 'HEIMDALL_NODE_HEAP_MB'] : ['HEIMDALL_NODE_HEAP_MB'];
+        await withProcessEnv(overrides, async () => {
+          const outcome = await runGate({
+            cwd: repo,
+            runCommand: async (command, cwd, env) => {
+              seen.push({ command, nodeOptions: env.NODE_OPTIONS });
+              return result({ exitCode: 0, stdout: 'ok\n' });
+            },
+          });
+          expect(outcome.kind).toBe('green');
+          expect(outcome.warnings).toEqual([]);
+          expect(outcome.nodeHeap).toEqual({ kind: 'default' });
+          expect(formatReport(outcome)).toContain('node-heap: default');
+        }, unset);
+        expect(seen).toEqual([
+          { command: 'echo up', nodeOptions: existing },
+          { command: 'npm test', nodeOptions: existing },
+          { command: 'echo down', nodeOptions: existing },
+        ]);
+      }
+    }, {
+      setup: ['echo up'],
+      steps: { tests: { command: 'npm test' } },
+      teardown: ['echo down'],
+    });
+  });
+
+  it('appends --max-old-space-size for setup, steps, merge-base reruns, and teardown via --node-heap', async () => {
+    await seededRepo(async (repo) => {
+      const seen: Array<{ command: string; cwd: string; nodeOptions: string | undefined }> = [];
+      await withProcessEnv({ NODE_OPTIONS: '--enable-source-maps' }, async () => {
+        const outcome = await runGate({
+          cwd: repo,
+          nodeHeapMb: 8192,
+          runCommand: captureLifecycleCommand(seen),
+        });
+        expect(outcome.kind).toBe('red');
+        expect(outcome.warnings).toEqual([]);
+        expect(outcome.nodeHeap).toEqual({ kind: 'configured', mb: 8192, source: 'cli' });
+        expect(formatReport(outcome)).toContain('node-heap: 8192 MB (from --node-heap)');
+      }, ['HEIMDALL_NODE_HEAP_MB']);
+      expect(seen.map((entry) => entry.command)).toEqual([
+        'echo up',
+        'knip --reporter json',
+        'knip --reporter json',
+        'echo down',
+      ]);
+      expect(seen.some((entry) => entry.cwd.includes('knip-base'))).toBe(true);
+      expect(seen.every((entry) => entry.nodeOptions === '--enable-source-maps --max-old-space-size=8192')).toBe(
+        true,
+      );
+    }, lifecycleConfig);
+  });
+
+  it('applies HEIMDALL_NODE_HEAP_MB when --node-heap is not set, and lets --node-heap win over env', async () => {
+    await seededRepo(async (repo) => {
+      const envSeen: Array<{ command: string; cwd: string; nodeOptions: string | undefined }> = [];
+      await withProcessEnv({ HEIMDALL_NODE_HEAP_MB: '8192' }, async () => {
+        const outcome = await runGate({
+          cwd: repo,
+          runCommand: captureLifecycleCommand(envSeen),
+        });
+        expect(outcome.kind).toBe('red');
+        expect(outcome.nodeHeap).toEqual({ kind: 'configured', mb: 8192, source: 'env' });
+        expect(formatReport(outcome)).toContain('node-heap: 8192 MB (from HEIMDALL_NODE_HEAP_MB)');
+      }, ['NODE_OPTIONS']);
+      expect(envSeen.map((entry) => entry.nodeOptions)).toEqual([
+        '--max-old-space-size=8192',
+        '--max-old-space-size=8192',
+        '--max-old-space-size=8192',
+        '--max-old-space-size=8192',
+      ]);
+
+      const overrideSeen: Array<{ command: string; cwd: string; nodeOptions: string | undefined }> = [];
+      await withProcessEnv({ HEIMDALL_NODE_HEAP_MB: '4096' }, async () => {
+        const outcome = await runGate({
+          cwd: repo,
+          nodeHeapMb: 8192,
+          runCommand: captureLifecycleCommand(overrideSeen),
+        });
+        expect(outcome.kind).toBe('red');
+        expect(outcome.nodeHeap).toEqual({ kind: 'configured', mb: 8192, source: 'cli' });
+        expect(formatReport(outcome)).toContain('node-heap: 8192 MB (from --node-heap)');
+      }, ['NODE_OPTIONS']);
+      expect(overrideSeen.every((entry) => entry.nodeOptions === '--max-old-space-size=8192')).toBe(true);
+    }, lifecycleConfig);
+  });
+
+  it('leaves an existing NODE_OPTIONS --max-old-space-size alone, warns, and notes NODE_OPTIONS in the summary', async () => {
+    await seededRepo(async (repo) => {
+      for (const existing of [
+        '--max-old-space-size=4096',
+        '--enable-source-maps --max-old-space-size 4096',
+        '--max_old_space_size=4096',
+      ]) {
+        const seen: Array<string | undefined> = [];
+        await withProcessEnv({ NODE_OPTIONS: existing }, async () => {
+          const outcome = await runGate({
+            cwd: repo,
+            nodeHeapMb: 8192,
+            runCommand: async (command, cwd, env) => {
+              seen.push(env.NODE_OPTIONS);
+              return result({ exitCode: 0, stdout: 'ok\n' });
+            },
+          });
+          expect(outcome.kind).toBe('green');
+          expect(outcome.warnings.some((warning) => warning.includes('NODE_OPTIONS') && warning.includes('--node-heap 8192'))).toBe(true);
+          expect(outcome.nodeHeap).toEqual({ kind: 'node-options', mb: 4096 });
+          const report = formatReport(outcome);
+          expect(report).toMatch(/WARNING:\s+NODE_OPTIONS already sets --max-old-space-size/);
+          expect(report).toContain('node-heap: 4096 MB (from NODE_OPTIONS)');
+        }, ['HEIMDALL_NODE_HEAP_MB']);
+        expect(seen).toEqual([existing]);
+      }
+
+      // Same behavior when HEIMDALL_NODE_HEAP_MB is set instead of --node-heap.
+      const envConflictSeen: Array<string | undefined> = [];
+      await withProcessEnv({ NODE_OPTIONS: '--max-old-space-size=4096', HEIMDALL_NODE_HEAP_MB: '8192' }, async () => {
+        const outcome = await runGate({
+          cwd: repo,
+          runCommand: async (command, cwd, env) => {
+            envConflictSeen.push(env.NODE_OPTIONS);
+            return result({ exitCode: 0, stdout: 'ok\n' });
+          },
+        });
+        expect(outcome.kind).toBe('green');
+        expect(outcome.warnings.some((warning) => warning.includes('HEIMDALL_NODE_HEAP_MB=8192'))).toBe(true);
+        expect(formatReport(outcome)).toContain('node-heap: 4096 MB (from NODE_OPTIONS)');
+      });
+      expect(envConflictSeen).toEqual(['--max-old-space-size=4096']);
+
+      // When NODE_OPTIONS sets --max-old-space-size and neither flag nor env is set,
+      // leave it alone without warning and report NODE_OPTIONS as the active limit.
+      await withProcessEnv({ NODE_OPTIONS: '--max-old-space-size=4096' }, async () => {
+        const outcome = await runGate({
+          cwd: repo,
+          runCommand: async () => result({ exitCode: 0, stdout: 'ok\n' }),
+        });
+        expect(outcome.kind).toBe('green');
+        expect(outcome.warnings).toEqual([]);
+        expect(formatReport(outcome)).toContain('node-heap: 4096 MB (from NODE_OPTIONS)');
+      }, ['HEIMDALL_NODE_HEAP_MB']);
+    });
+  });
+
+  it('does not confuse unrelated NODE_OPTIONS substrings with --max-old-space-size', async () => {
+    await seededRepo(async (repo) => {
+      const existing = '--require ./my-max-old-space-size.js';
+      const seen: Array<string | undefined> = [];
+      await withProcessEnv({ NODE_OPTIONS: existing }, async () => {
+        const outcome = await runGate({
+          cwd: repo,
+          nodeHeapMb: 8192,
+          runCommand: async (command, cwd, env) => {
+            seen.push(env.NODE_OPTIONS);
+            return result({ exitCode: 0, stdout: 'ok\n' });
+          },
+        });
+        expect(outcome.kind).toBe('green');
+        expect(outcome.warnings).toEqual([]);
+      }, ['HEIMDALL_NODE_HEAP_MB']);
+      expect(seen).toEqual([`${existing} --max-old-space-size=8192`]);
+    });
+  });
+
+  it('returns GATE ERROR (exit 2) for empty, non-integer, or non-positive HEIMDALL_NODE_HEAP_MB', async () => {
+    await seededRepo(async (repo) => {
+      for (const bad of ['', '   ', '0', '-1', '4.5', 'abc', '8192mb', '1e4']) {
+        let ran = false;
+        await withProcessEnv({ HEIMDALL_NODE_HEAP_MB: bad }, async () => {
+          const outcome = await runGate({
+            cwd: repo,
+            runCommand: async () => {
+              ran = true;
+              return result({ exitCode: 0, stdout: 'ok\n' });
+            },
+          });
+          expect(outcome.kind).toBe('error');
+          expect(outcome.exitCode).toBe(2);
+          if (outcome.kind === 'error') {
+            expect(outcome.reason).toContain('HEIMDALL_NODE_HEAP_MB');
+          }
+          expect(outcome.nodeHeap).toBeUndefined();
+        }, ['NODE_OPTIONS']);
+        expect(ran).toBe(false);
+      }
+    });
+  });
+});
+
 describe('posixShellQuote', () => {
   it('keeps $ and backticks literal when interpolated into sh', () => {
     const printed = execFileSync('sh', ['-c', `printf '%s' ${posixShellQuote('$HOME and `uname`')}`], {

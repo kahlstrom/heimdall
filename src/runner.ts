@@ -48,6 +48,7 @@ import {
   EXIT_GATE_ERROR,
   EXIT_GREEN,
   EXIT_RED,
+  NODE_HEAP_MB_ENV,
   addedLineCount,
   err,
   errorMessage,
@@ -56,6 +57,7 @@ import {
   type Finding,
   type GateConfig,
   type GateOutcome,
+  type NodeHeap,
   type Result,
   type StepResult,
 } from './types.js';
@@ -69,9 +71,151 @@ export type RunGateOptions = {
   readonly allowWide?: boolean;
   /** CLI `--base`: comparison base, wins over config `baseRef`. */
   readonly baseRef?: string;
+  /** CLI `--node-heap`: positive integer in MB, wins over `HEIMDALL_NODE_HEAP_MB`. */
+  readonly nodeHeapMb?: number;
   /** Start-of-run lines. The CLI writes these to stdout before steps run. */
   readonly log?: (text: string) => void;
 };
+
+const MAX_OLD_SPACE_SIZE_FLAG_RE = /^--max[-_]old[-_]space[-_]size(?:=(.*))?$/;
+
+type ExistingNodeHeap = {
+  readonly mb?: number;
+};
+
+type ResolvedNodeHeap = {
+  readonly state: NodeHeap;
+  readonly nodeOptions: string | undefined;
+  readonly warning: string | undefined;
+};
+
+export function parseNodeHeapMb(raw: string, source: string): Result<number> {
+  const trimmed = raw.trim();
+  if (trimmed === '') {
+    return err(`${source} must be a positive integer (MB)`);
+  }
+  if (!/^\d+$/.test(trimmed)) {
+    return err(`${source} must be a positive integer (MB), got ${JSON.stringify(raw)}`);
+  }
+  const value = Number(trimmed);
+  if (!Number.isSafeInteger(value) || value <= 0) {
+    return err(`${source} must be a positive integer (MB), got ${JSON.stringify(raw)}`);
+  }
+  return ok(value);
+}
+
+function tokenizeNodeOptions(raw: string): string[] {
+  const tokens: string[] = [];
+  let current = '';
+  let inToken = false;
+  let inQuotes = false;
+  for (let i = 0; i < raw.length; i += 1) {
+    const ch = raw[i];
+    if (ch === undefined) {
+      continue;
+    }
+    if (inQuotes && ch === '\\' && i + 1 < raw.length && (raw[i + 1] === '"' || raw[i + 1] === '\\')) {
+      current += raw[i + 1];
+      i += 1;
+      inToken = true;
+      continue;
+    }
+    if (ch === '"') {
+      inQuotes = !inQuotes;
+      inToken = true;
+      continue;
+    }
+    if (!inQuotes && /\s/.test(ch)) {
+      if (inToken) {
+        tokens.push(current);
+        current = '';
+        inToken = false;
+      }
+      continue;
+    }
+    current += ch;
+    inToken = true;
+  }
+  if (inToken) {
+    tokens.push(current);
+  }
+  return tokens;
+}
+
+function findExistingMaxOldSpaceSize(nodeOptions: string | undefined): ExistingNodeHeap | undefined {
+  if (nodeOptions === undefined || nodeOptions.trim() === '') {
+    return undefined;
+  }
+  const tokens = tokenizeNodeOptions(nodeOptions);
+  let found: ExistingNodeHeap | undefined;
+  for (let i = 0; i < tokens.length; i += 1) {
+    const token = tokens[i];
+    if (token === undefined) {
+      continue;
+    }
+    const match = MAX_OLD_SPACE_SIZE_FLAG_RE.exec(token);
+    if (!match) {
+      continue;
+    }
+    let rawValue = match[1];
+    if (rawValue === undefined) {
+      const next = tokens[i + 1];
+      if (next !== undefined && !next.startsWith('-')) {
+        rawValue = next;
+        i += 1;
+      }
+    }
+    const parsed = rawValue !== undefined ? parseNodeHeapMb(rawValue, 'NODE_OPTIONS') : undefined;
+    found = parsed?.ok ? { mb: parsed.value } : {};
+  }
+  return found;
+}
+
+function resolveNodeHeap(cliNodeHeapMb: number | undefined, env: NodeJS.ProcessEnv): Result<ResolvedNodeHeap> {
+  let requested: { readonly mb: number; readonly source: 'cli' | 'env' } | undefined;
+  if (cliNodeHeapMb !== undefined) {
+    if (!Number.isSafeInteger(cliNodeHeapMb) || cliNodeHeapMb <= 0) {
+      return err(`--node-heap must be a positive integer (MB), got ${String(cliNodeHeapMb)}`);
+    }
+    requested = { mb: cliNodeHeapMb, source: 'cli' };
+  } else if (env[NODE_HEAP_MB_ENV] !== undefined) {
+    const parsed = parseNodeHeapMb(env[NODE_HEAP_MB_ENV], NODE_HEAP_MB_ENV);
+    if (!parsed.ok) {
+      return parsed;
+    }
+    requested = { mb: parsed.value, source: 'env' };
+  }
+
+  const existing = findExistingMaxOldSpaceSize(env.NODE_OPTIONS);
+  if (existing !== undefined) {
+    const state: NodeHeap =
+      existing.mb !== undefined ? { kind: 'node-options', mb: existing.mb } : { kind: 'node-options' };
+    const ignored =
+      requested === undefined
+        ? undefined
+        : requested.source === 'cli'
+          ? `--node-heap ${requested.mb}`
+          : `${NODE_HEAP_MB_ENV}=${requested.mb}`;
+    const warning =
+      ignored !== undefined
+        ? `NODE_OPTIONS already sets --max-old-space-size; leaving it unchanged (ignoring ${ignored})`
+        : undefined;
+    return ok({ state, nodeOptions: undefined, warning });
+  }
+
+  if (requested === undefined) {
+    return ok({ state: { kind: 'default' }, nodeOptions: undefined, warning: undefined });
+  }
+
+  const current = env.NODE_OPTIONS?.trim() ?? '';
+  const flag = `--max-old-space-size=${requested.mb}`;
+  const nodeOptions = current === '' ? flag : `${current} ${flag}`;
+  return ok({
+    state: { kind: 'configured', mb: requested.mb, source: requested.source },
+    nodeOptions,
+    warning: undefined,
+  });
+}
 
 async function runShellList(
   commands: readonly string[],
@@ -358,12 +502,26 @@ function headChangeReason(start: HeadSnapshot, repoRoot: string): string | undef
 }
 
 export async function runGate(options: RunGateOptions): Promise<GateOutcome> {
-  const runCommand = options.runCommand ?? defaultRunCommand;
   const processEnv = process.env;
+  const resolvedHeap = resolveNodeHeap(options.nodeHeapMb, processEnv);
+  if (!resolvedHeap.ok) {
+    return gateError(resolvedHeap.error, undefined);
+  }
+  const outcome = await runGateWithHeap(options, processEnv, resolvedHeap.value);
+  return { ...outcome, nodeHeap: resolvedHeap.value.state };
+}
+
+async function runGateWithHeap(
+  options: RunGateOptions,
+  processEnv: NodeJS.ProcessEnv,
+  nodeHeap: ResolvedNodeHeap,
+): Promise<GateOutcome> {
+  const runCommand = options.runCommand ?? defaultRunCommand;
   const abortSignal = options.abortSignal;
+  const heapWarnings: readonly string[] = nodeHeap.warning !== undefined ? [nodeHeap.warning] : [];
   const started = gitRepoRoot(options.cwd);
   if (!started.ok) {
-    return gateError(started.error, undefined);
+    return gateError(started.error, undefined, [], undefined, heapWarnings);
   }
   const repoRoot = started.value;
   const lookedUp = resolveConfigPath(
@@ -374,23 +532,23 @@ export async function runGate(options: RunGateOptions): Promise<GateOutcome> {
     processEnv,
   );
   if (!lookedUp.ok) {
-    return gateError(lookedUp.error, undefined);
+    return gateError(lookedUp.error, undefined, [], undefined, heapWarnings);
   }
   const configPath = lookedUp.value;
-  const deprecations: string[] = [...deprecatedEnvWarnings(processEnv)];
+  const initialWarnings: string[] = [...deprecatedEnvWarnings(processEnv), ...heapWarnings];
   if (isLegacyConfigPath(configPath)) {
-    deprecations.push(DEPRECATED_CONFIG_WARNING);
+    initialWarnings.push(DEPRECATED_CONFIG_WARNING);
   }
   const loaded = loadGateConfigFile(configPath);
   if (!loaded.ok) {
-    return withConfigPath(gateError(loaded.error, undefined, [], undefined, deprecations), configPath);
+    return withConfigPath(gateError(loaded.error, undefined, [], undefined, initialWarnings), configPath);
   }
   const config = loaded.value;
 
   const base = resolveBaseRef(repoRoot, config.baseRef, options.baseRef);
   if (!base.ok) {
     return withConfigPath(
-      gateError(base.error, options.baseRef ?? config.baseRef, [], undefined, deprecations),
+      gateError(base.error, options.baseRef ?? config.baseRef, [], undefined, initialWarnings),
       configPath,
     );
   }
@@ -407,7 +565,7 @@ export async function runGate(options: RunGateOptions): Promise<GateOutcome> {
         base.value.spec,
         [],
         base.value.mergeBaseSha,
-        deprecations,
+        initialWarnings,
         undefined,
         undefined,
         base.value.headSha,
@@ -432,7 +590,7 @@ export async function runGate(options: RunGateOptions): Promise<GateOutcome> {
         base.value.spec,
         [],
         base.value.mergeBaseSha,
-        deprecations,
+        initialWarnings,
         scope.value,
         base.value.sha,
         base.value.headSha,
@@ -441,7 +599,7 @@ export async function runGate(options: RunGateOptions): Promise<GateOutcome> {
     );
   }
 
-  const warnings: string[] = [...deprecations];
+  const warnings: string[] = [...initialWarnings];
   const wide = wideDiffDecision({
     changedFileCount: scope.value.changedFiles.size,
     maxChangedFiles: config.maxChangedFiles,
@@ -504,6 +662,7 @@ export async function runGate(options: RunGateOptions): Promise<GateOutcome> {
   const env: NodeJS.ProcessEnv = {
     ...processEnv,
     ...(processEnv.NO_COLOR === undefined ? { NO_COLOR: '1' } : {}),
+    ...(nodeHeap.nodeOptions !== undefined ? { NODE_OPTIONS: nodeHeap.nodeOptions } : {}),
     [TMP_ENV]: tmpDir,
     [LEGACY_TMP_ENV]: tmpDir,
     [CONFIG_DIR_ENV]: configDir,
